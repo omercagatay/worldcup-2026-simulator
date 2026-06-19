@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 const KIMI_API_URL: &str = "https://api.moonshot.cn/v1/chat/completions";
-const KIMI_MODEL: &str = "moonshot-v1-8k";
+const KIMI_MODEL: &str = "kimi-k2.6";
 
 const SYSTEM_PROMPT: &str = r#"You are a football (soccer) analyst for the 2026 FIFA World Cup Monte Carlo simulation.
 
@@ -35,7 +35,13 @@ If a team mentioned is not in the list, omit it. If no teams are affected, retur
 struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
-    temperature: f32,
+    thinking: ThinkingConfig,
+}
+
+#[derive(Serialize)]
+struct ThinkingConfig {
+    #[serde(rename = "type")]
+    kind: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -74,7 +80,9 @@ pub async fn analyze_scenario(prompt: &str, api_key: &str) -> Result<ScenarioImp
                 content: prompt.to_string(),
             },
         ],
-        temperature: 0.3,
+        thinking: ThinkingConfig {
+            kind: "disabled".to_string(),
+        },
     };
 
     let resp = client
