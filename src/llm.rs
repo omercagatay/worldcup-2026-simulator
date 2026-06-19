@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-const GLM_API_URL: &str = "https://api.z.ai/api/paas/v4/chat/completions";
-const GLM_MODEL: &str = "glm-5.2";
+const KIMI_API_URL: &str = "https://api.moonshot.cn/v1/chat/completions";
+const KIMI_MODEL: &str = "moonshot-v1-8k";
 
 const SYSTEM_PROMPT: &str = r#"You are a football (soccer) analyst for the 2026 FIFA World Cup Monte Carlo simulation.
 
@@ -63,7 +63,7 @@ pub struct ScenarioImpact {
 pub async fn analyze_scenario(prompt: &str, api_key: &str) -> Result<ScenarioImpact> {
     let client = reqwest::Client::new();
     let req = ChatRequest {
-        model: GLM_MODEL.to_string(),
+        model: KIMI_MODEL.to_string(),
         messages: vec![
             ChatMessage {
                 role: "system".to_string(),
@@ -78,28 +78,28 @@ pub async fn analyze_scenario(prompt: &str, api_key: &str) -> Result<ScenarioImp
     };
 
     let resp = client
-        .post(GLM_API_URL)
+        .post(KIMI_API_URL)
         .bearer_auth(api_key)
         .json(&req)
         .send()
         .await
-        .context("Failed to call GLM API")?;
+        .context("Failed to call Kimi API")?;
 
     let status = resp.status();
     let body = resp
         .text()
         .await
-        .context("Failed to read GLM response body")?;
+        .context("Failed to read Kimi response body")?;
     if !status.is_success() {
-        anyhow::bail!("GLM API error {status}: {body}");
+        anyhow::bail!("Kimi API error {status}: {body}");
     }
 
     let chat: ChatResponse =
-        serde_json::from_str(&body).context("Failed to parse GLM chat response")?;
+        serde_json::from_str(&body).context("Failed to parse Kimi chat response")?;
     let content = chat
         .choices
         .first()
-        .context("No choices in GLM response")?
+        .context("No choices in Kimi response")?
         .message
         .content
         .clone();

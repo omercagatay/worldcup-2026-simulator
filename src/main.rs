@@ -35,16 +35,16 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let world = World::new();
-    let glm_api_key = std::env::var("GLM_API_KEY").ok();
-    if glm_api_key.is_some() {
-        tracing::info!("GLM scenario analysis enabled");
+    let kimi_api_key = std::env::var("KIMI_API_KEY").ok();
+    if kimi_api_key.is_some() {
+        tracing::info!("Kimi scenario analysis enabled");
     } else {
-        tracing::warn!("GLM_API_KEY not set — scenario endpoint will return an error");
+        tracing::warn!("KIMI_API_KEY not set — scenario endpoint will return an error");
     }
 
     let state = Arc::new(AppState {
         world: Arc::new(RwLock::new(world)),
-        glm_api_key,
+        kimi_api_key,
         live_data: Arc::new(RwLock::new(None)),
     });
 

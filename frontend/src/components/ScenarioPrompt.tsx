@@ -21,7 +21,7 @@ export function ScenarioPrompt({
     <section className="section scenario-section">
       <h2>Scenario Analysis (LLM-powered)</h2>
       <p className="scenario-desc">
-        Describe an injury, suspension, or event. The LLM (GLM-5.2) analyzes the
+        Describe an injury, suspension, or event. The LLM (Kimi) analyzes the
         impact, adjusts team Elo ratings, and re-runs the simulation.
       </p>
       <div className="scenario-input">

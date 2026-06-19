@@ -11,7 +11,7 @@ use crate::validation::{validate_elo_overrides, validate_n_sims};
 #[derive(Clone)]
 pub struct AppState {
     pub world: Arc<RwLock<World>>,
-    pub glm_api_key: Option<String>,
+    pub kimi_api_key: Option<String>,
     pub live_data: Arc<RwLock<Option<LiveData>>>,
 }
 
@@ -45,9 +45,9 @@ pub async fn scenario(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ScenarioRequest>,
 ) -> Result<Json<SimResponse>, (StatusCode, String)> {
-    let api_key = state.glm_api_key.clone().ok_or((
+    let api_key = state.kimi_api_key.clone().ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
-        "GLM_API_KEY not set — LLM scenario analysis is disabled".to_string(),
+        "KIMI_API_KEY not set — LLM scenario analysis is disabled".to_string(),
     ))?;
 
     let n_sims =

@@ -4,7 +4,7 @@ Monte Carlo simulation of the 2026 FIFA World Cup (48-team format) with an LLM-p
 
 - **Backend**: Rust (axum) — Elo → Poisson match model, parallel Monte Carlo simulation via rayon
 - **Frontend**: TypeScript (Vite + React) — results tables, group standings, bracket viz
-- **LLM**: GLM-5.2 (Z.ai API) — natural-language scenarios → structured Elo adjustments → re-simulation
+- **LLM**: Kimi (Moonshot API) — natural-language scenarios → structured Elo adjustments → re-simulation
 
 ## Model
 
@@ -30,7 +30,7 @@ Group stage: round-robin, points/GD/GF ranking with head-to-head tiebreakers. Th
 
 ```bash
 cd wc2026-sim
-cp .env.example .env          # add your GLM_API_KEY (get one at https://z.ai)
+cp .env.example .env          # add your KIMI_API_KEY (get one at https://platform.moonshot.cn)
 cargo run --release            # serves on http://localhost:3000
 ```
 
@@ -80,7 +80,7 @@ curl -X POST http://localhost:3000/api/simulate \
 2. In [Railway](https://railway.app), click **New Service → Deploy from GitHub repo**
 3. Railway auto-detects the `Dockerfile`
 4. Add environment variables in the Railway dashboard:
-   - `GLM_API_KEY` — your Z.ai API key (required for /api/scenario)
+   - `KIMI_API_KEY` — your Moonshot API key (required for /api/scenario)
    - `PORT` — defaults to 3000
    - `RUST_LOG` — `wc2026_sim=info`
 5. Set health check path to `/api/health`
@@ -91,7 +91,7 @@ Railway will build the Docker image (Rust + frontend) and deploy on a public URL
 
 ```bash
 docker build -t wc2026-sim .
-docker run -p 3000:3000 -e GLM_API_KEY=your_key wc2026-sim
+docker run -p 3000:3000 -e KIMI_API_KEY=your_key wc2026-sim
 ```
 
 ## Project Structure
