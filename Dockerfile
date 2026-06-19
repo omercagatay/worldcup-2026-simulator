@@ -2,7 +2,16 @@
 FROM rust:slim-bookworm AS backend-builder
 WORKDIR /app
 RUN apt-get update && apt-get install -y build-essential && rm -rf /var/lib/apt/lists/*
+
+# Cache dependencies: build a dummy binary first so cargo compiles all crates
+# into a Docker layer that only invalidates when Cargo.toml/Cargo.lock change.
 COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs \
+    && cargo build --release \
+    && rm -rf src target/release/deps/wc2026_sim* target/release/wc2026-sim* \
+           target/release/.fingerprint/wc2026_sim* target/release/incremental/wc2026_sim*
+
+# Real build: only our crate recompiles; dependencies come from the cached layer.
 COPY src/ ./src/
 RUN cargo build --release
 
