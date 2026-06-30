@@ -12,6 +12,8 @@ import { BracketView } from "./components/BracketView";
 import { ScenarioPrompt } from "./components/ScenarioPrompt";
 import { LiveStats } from "./components/LiveStats";
 
+type DashboardView = "forecast" | "bracket" | "groups" | "live";
+
 export default function App() {
   const [data, setData] = useState<SimResponse | null>(null);
   const [liveData, setLiveData] = useState<LiveData | null>(null);
@@ -20,6 +22,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [nSims, setNSims] = useState(50000);
   const [seed, setSeed] = useState(12345);
+  const [activeView, setActiveView] = useState<DashboardView>("forecast");
 
   const handleSimulate = useCallback(async () => {
     setLoading(true);
@@ -27,6 +30,7 @@ export default function App() {
     try {
       const result = await runSimulation({ n_sims: nSims, seed });
       setData(result);
+      setActiveView("forecast");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -41,6 +45,7 @@ export default function App() {
       try {
         const result = await runScenario({ prompt, n_sims: nSims, seed });
         setData(result);
+        setActiveView("forecast");
       } catch (e) {
         setError(String(e));
       } finally {
@@ -56,12 +61,13 @@ export default function App() {
     try {
       const live = await refreshLiveData();
       setLiveData(live);
+      if (!data) setActiveView("live");
     } catch (e) {
       setError(String(e));
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [data]);
 
   const liveMatchCount = liveData
     ? liveData.played_matches.length + (liveData.knockout_matches?.length ?? 0)
@@ -69,6 +75,8 @@ export default function App() {
   const topChampion = data?.top_champions[0];
   const topScorer = liveData?.goalscorers[0];
   const topFinal = data?.top_finals[0];
+  const topContenders = data?.top_champions.slice(0, 5) ?? [];
+  const recentKnockouts = liveData?.knockout_matches?.slice(-4).reverse() ?? [];
 
   return (
     <div className="app">
@@ -152,10 +160,6 @@ export default function App() {
         </section>
       )}
 
-      {liveData && (
-        <LiveStats liveData={liveData} />
-      )}
-
       {data && (
         <>
           {data.scenario_applied && (
@@ -174,51 +178,144 @@ export default function App() {
             </div>
           )}
 
-          <ScenarioPrompt onSubmit={handleScenario} disabled={loading} />
+          <div className="analysis-layout">
+            <main className="forecast-panel">
+              {data.consensus_champion && (
+                <div className="champion-banner">
+                  <div className="champion-label">Consensus Champion</div>
+                  <div className="champion-name">{data.consensus_champion}</div>
+                  <div className="champion-odds">
+                    {data.top_champions[0]?.win_pct.toFixed(2)}% win rate
+                    {" · "}
+                    {data.n_sims.toLocaleString()} simulations
+                  </div>
+                </div>
+              )}
 
-          {data.consensus_champion && (
-            <div className="champion-banner">
-              <div className="champion-label">Consensus Champion</div>
-              <div className="champion-name">{data.consensus_champion}</div>
-              <div className="champion-odds">
-                {data.top_champions[0]?.win_pct.toFixed(2)}% win rate
-                {" · "}
-                {data.n_sims.toLocaleString()} simulations
-              </div>
-            </div>
+              <section className="contender-strip">
+                <div className="strip-heading">
+                  <span className="summary-label">Win Leaders</span>
+                  <strong>Top contenders</strong>
+                </div>
+                <div className="contender-list">
+                  {topContenders.map((team, i) => (
+                    <div key={team.team} className="contender-row">
+                      <span className="contender-rank">{i + 1}</span>
+                      <span className="contender-team">{team.team}</span>
+                      <span className="contender-pct">{team.win_pct.toFixed(2)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </main>
+
+            <aside className="insight-rail">
+              <ScenarioPrompt onSubmit={handleScenario} disabled={loading} />
+
+              <section className="rail-panel">
+                <h3>Likely Finals</h3>
+                <div className="finals-list compact">
+                  {data.top_finals.slice(0, 5).map((f, i) => (
+                    <div key={i} className="final-pair">
+                      <span>
+                        <strong>{f.a}</strong> vs <strong>{f.b}</strong>
+                      </span>
+                      <span className="pct-tag">{f.pct.toFixed(2)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              {liveData && (
+                <section className="rail-panel live-snapshot">
+                  <h3>Live Snapshot</h3>
+                  <div className="snapshot-grid">
+                    <span>Matches</span>
+                    <strong>{liveMatchCount}</strong>
+                    <span>Goals</span>
+                    <strong>{liveData.tournament_stats?.goals_scored ?? "-"}</strong>
+                    <span>Golden Boot</span>
+                    <strong>{topScorer ? `${topScorer.player} (${topScorer.goals})` : "-"}</strong>
+                  </div>
+                  {recentKnockouts.length > 0 && (
+                    <div className="recent-knockouts">
+                      {recentKnockouts.map((m, i) => (
+                        <span key={i}>{m.winner} advanced</span>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
+            </aside>
+          </div>
+        </>
+      )}
+
+      {(data || liveData) && (
+        <>
+          <nav className="view-tabs" aria-label="Dashboard views">
+            {data && (
+              <button
+                type="button"
+                className={activeView === "forecast" ? "active" : ""}
+                onClick={() => setActiveView("forecast")}
+              >
+                Forecast
+              </button>
+            )}
+            {data && (
+              <button
+                type="button"
+                className={activeView === "bracket" ? "active" : ""}
+                onClick={() => setActiveView("bracket")}
+              >
+                Bracket
+              </button>
+            )}
+            {data && (
+              <button
+                type="button"
+                className={activeView === "groups" ? "active" : ""}
+                onClick={() => setActiveView("groups")}
+              >
+                Groups
+              </button>
+            )}
+            {liveData && (
+              <button
+                type="button"
+                className={activeView === "live" ? "active" : ""}
+                onClick={() => setActiveView("live")}
+              >
+                Live Data
+              </button>
+            )}
+          </nav>
+
+          {data && activeView === "forecast" && (
+            <section className="section tab-panel">
+              <h2>Tournament Win Probabilities</h2>
+              <ResultsTable teams={data.teams} />
+            </section>
           )}
 
-          <section className="section">
-            <h2>Tournament Win Probabilities</h2>
-            <ResultsTable teams={data.teams} />
-          </section>
+          {data && activeView === "bracket" && (
+            <section className="section tab-panel">
+              <h2>Representative Bracket</h2>
+              <BracketView bracket={data.bracket} champion={data.consensus_champion} />
+            </section>
+          )}
 
-          <section className="section">
-            <h2>Representative Bracket</h2>
-            <BracketView bracket={data.bracket} champion={data.consensus_champion} />
-          </section>
+          {data && activeView === "groups" && (
+            <section className="section tab-panel">
+              <h2>Group Stage Probabilities</h2>
+              <GroupTables groups={data.groups} />
+            </section>
+          )}
 
-          <section className="section">
-            <h2>Group Stage Probabilities</h2>
-            <GroupTables groups={data.groups} />
-          </section>
-
-          <section className="section">
-            <h2>Top Final Matchups</h2>
-            <div className="finals-list">
-              {data.top_finals.map((f, i) => (
-                <div key={i} className="final-pair">
-                  <span>
-                    <strong>{f.a}</strong> vs <strong>{f.b}</strong>
-                    <span style={{ color: "var(--text-dim)", marginLeft: "0.6rem", fontSize: "0.8rem" }}>
-                      {f.count.toLocaleString()} sims
-                    </span>
-                  </span>
-                  <span className="pct-tag">{f.pct.toFixed(2)}%</span>
-                </div>
-              ))}
-            </div>
-          </section>
+          {liveData && activeView === "live" && (
+            <LiveStats liveData={liveData} />
+          )}
         </>
       )}
     </div>
