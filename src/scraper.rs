@@ -12,6 +12,7 @@ const WIKI_API_URL: &str = "https://en.wikipedia.org/w/api.php";
 pub struct LiveData {
     pub elo_ratings: HashMap<String, f64>,
     pub played_matches: Vec<ScrapedMatch>,
+    pub knockout_matches: Vec<ScrapedKnockoutMatch>,
     pub goalscorers: Vec<Goalscorer>,
     pub group_standings: Vec<GroupStanding>,
     pub tournament_stats: Option<TournamentStats>,
@@ -25,6 +26,17 @@ pub struct ScrapedMatch {
     pub score_a: u16,
     pub team_b: String,
     pub score_b: u16,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ScrapedKnockoutMatch {
+    pub team_a: String,
+    pub score_a: u16,
+    pub team_b: String,
+    pub score_b: u16,
+    pub winner: String,
+    pub penalty_score_a: Option<u16>,
+    pub penalty_score_b: Option<u16>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -63,7 +75,7 @@ pub async fn fetch_all() -> Result<LiveData> {
 
     let elo_ratings = fetch_elo_ratings(&client).await?;
     let html = fetch_wikipedia_html(&client).await?;
-    let played_matches = parse_match_results(&html);
+    let (played_matches, knockout_matches) = parse_matches(&html);
     let goalscorers = parse_goalscorers(&html);
     let group_standings = parse_group_standings(&html);
     let tournament_stats = parse_tournament_stats(&html);
@@ -71,6 +83,7 @@ pub async fn fetch_all() -> Result<LiveData> {
     Ok(LiveData {
         elo_ratings,
         played_matches,
+        knockout_matches,
         goalscorers,
         group_standings,
         tournament_stats,
@@ -169,8 +182,14 @@ fn first_link_title(html: &str) -> Option<String> {
         .map(|t| t.to_string())
 }
 
+#[cfg(test)]
 fn parse_match_results(html: &str) -> Vec<ScrapedMatch> {
-    let mut matches = Vec::new();
+    parse_matches(html).0
+}
+
+fn parse_matches(html: &str) -> (Vec<ScrapedMatch>, Vec<ScrapedKnockoutMatch>) {
+    let mut group_matches = Vec::new();
+    let mut knockout_matches = Vec::new();
     let document = Html::parse_document(html);
     let footballbox = Selector::parse(".footballbox").expect("valid selector");
     let home_sel = Selector::parse(".fhome").expect("valid selector");
@@ -212,25 +231,44 @@ fn parse_match_results(html: &str) -> Vec<ScrapedMatch> {
             continue;
         }
 
-        let group = group_link_re
-            .captures(&fb_html)
-            .map(|c| c[1].to_string())
-            .unwrap_or_else(|| infer_group(&team_a));
+        let explicit_group = group_link_re.captures(&fb_html).map(|c| c[1].to_string());
+        let inferred_group = match (team_group(&team_a), team_group(&team_b)) {
+            (Some(a), Some(b)) if a == b => Some(a),
+            _ => None,
+        };
 
-        matches.push(ScrapedMatch {
-            group,
-            team_a,
-            score_a,
-            team_b,
-            score_b,
-        });
+        if let Some(group) = explicit_group.or(inferred_group) {
+            group_matches.push(ScrapedMatch {
+                group,
+                team_a,
+                score_a,
+                team_b,
+                score_b,
+            });
+            continue;
+        }
+
+        if let Some((winner, penalty_score_a, penalty_score_b)) =
+            knockout_winner(&team_a, score_a, &team_b, score_b, &fb_html)
+        {
+            knockout_matches.push(ScrapedKnockoutMatch {
+                team_a,
+                score_a,
+                team_b,
+                score_b,
+                winner,
+                penalty_score_a,
+                penalty_score_b,
+            });
+        }
     }
 
     tracing::info!(
-        "Parsed {} played matches from Wikipedia HTML",
-        matches.len()
+        "Parsed {} group matches and {} knockout matches from Wikipedia HTML",
+        group_matches.len(),
+        knockout_matches.len()
     );
-    matches
+    (group_matches, knockout_matches)
 }
 
 fn parse_score(text: &str) -> Option<(u16, u16)> {
@@ -241,6 +279,59 @@ fn parse_score(text: &str) -> Option<(u16, u16)> {
     Some((a, b))
 }
 
+fn knockout_winner(
+    team_a: &str,
+    score_a: u16,
+    team_b: &str,
+    score_b: u16,
+    fb_html: &str,
+) -> Option<(String, Option<u16>, Option<u16>)> {
+    if score_a > score_b {
+        return Some((team_a.to_string(), None, None));
+    }
+    if score_b > score_a {
+        return Some((team_b.to_string(), None, None));
+    }
+
+    let (penalty_score_a, penalty_score_b) = parse_penalty_score(fb_html)?;
+    if penalty_score_a > penalty_score_b {
+        Some((
+            team_a.to_string(),
+            Some(penalty_score_a),
+            Some(penalty_score_b),
+        ))
+    } else if penalty_score_b > penalty_score_a {
+        Some((
+            team_b.to_string(),
+            Some(penalty_score_a),
+            Some(penalty_score_b),
+        ))
+    } else {
+        None
+    }
+}
+
+fn parse_penalty_score(fb_html: &str) -> Option<(u16, u16)> {
+    let penalties_pos = fb_html
+        .find("Penalties")
+        .or_else(|| fb_html.find("penalties"))?;
+    let re = Regex::new(r"<th[^>]*>\s*(\d+)\s*[–—-]\s*(\d+)\s*</th>").ok()?;
+    let caps = re.captures(&fb_html[penalties_pos..])?;
+    let a = caps[1].parse::<u16>().ok()?;
+    let b = caps[2].parse::<u16>().ok()?;
+    Some((a, b))
+}
+
+fn team_group(team: &str) -> Option<String> {
+    for (letter, teams) in crate::data::groups() {
+        if teams.contains(&team) {
+            return Some(letter.to_string());
+        }
+    }
+    None
+}
+
+#[cfg(test)]
 fn infer_group(team: &str) -> String {
     for (letter, teams) in crate::data::groups() {
         if teams.contains(&team) {
@@ -488,6 +579,29 @@ mod tests {
         assert_eq!(matches[0].score_a, 2);
         assert_eq!(matches[0].score_b, 1);
         assert_eq!(matches[0].group, "A");
+    }
+
+    #[test]
+    fn parse_matches_extracts_knockout_penalty_winner() {
+        let html = r#"
+        <table class="footballbox">
+          <tr>
+            <th class="fhome"><a title="Germany national football team">Germany</a></th>
+            <th class="fscore"><a href="/wiki/2026_FIFA_World_Cup_knockout_stage#Germany_vs_Paraguay">1–1</a> (a.e.t.)</th>
+            <th class="faway"><a title="Paraguay national football team">Paraguay</a></th>
+          </tr>
+          <tr><th colspan="3">Penalties</th></tr>
+          <tr><td></td><th>3–4</th><td></td></tr>
+        </table>
+        "#;
+        let (group_matches, knockout_matches) = parse_matches(html);
+        assert!(group_matches.is_empty());
+        assert_eq!(knockout_matches.len(), 1);
+        assert_eq!(knockout_matches[0].team_a, "Germany");
+        assert_eq!(knockout_matches[0].team_b, "Paraguay");
+        assert_eq!(knockout_matches[0].winner, "Paraguay");
+        assert_eq!(knockout_matches[0].penalty_score_a, Some(3));
+        assert_eq!(knockout_matches[0].penalty_score_b, Some(4));
     }
 
     #[test]

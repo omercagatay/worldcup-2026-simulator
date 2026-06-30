@@ -63,6 +63,10 @@ export default function App() {
     }
   }, []);
 
+  const liveMatchCount = liveData
+    ? liveData.played_matches.length + (liveData.knockout_matches?.length ?? 0)
+    : 0;
+
   return (
     <div className="app">
       <header className="header">
@@ -74,7 +78,7 @@ export default function App() {
           )}
           {liveData && (
             <span className="live-badge">
-              {" · "}Live: {Object.keys(liveData.elo_ratings).length} Elo ratings, {liveData.played_matches.length} matches
+              {" · "}Live: {Object.keys(liveData.elo_ratings).length} Elo ratings, {liveMatchCount} matches
             </span>
           )}
         </p>
@@ -165,7 +169,7 @@ export default function App() {
           </section>
 
           <section className="section">
-            <h2>Consensus Bracket</h2>
+            <h2>Representative Bracket</h2>
             <BracketView bracket={data.bracket} champion={data.consensus_champion} />
           </section>
 

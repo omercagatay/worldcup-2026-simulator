@@ -15,6 +15,7 @@ pub struct World {
     pub host: Vec<bool>,
     pub groups: Vec<(String, Vec<usize>)>,
     pub played: HashMap<(String, usize, usize), (u16, u16)>,
+    pub played_knockout: HashMap<(usize, usize), usize>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -37,6 +38,8 @@ pub struct SimResults {
     pub r32_counts: HashMap<usize, usize>,
     pub group_stats: HashMap<String, HashMap<usize, GroupStat>>,
     pub slot_mode: HashMap<u32, usize>,
+    pub representative_slot_winners: HashMap<u32, usize>,
+    pub representative_slot_matchups: HashMap<u32, (usize, usize)>,
     pub final_pairs: HashMap<(usize, usize), usize>,
     #[allow(dead_code)]
     pub third_place_counts: HashMap<usize, usize>,
@@ -105,6 +108,7 @@ impl World {
             host,
             groups,
             played,
+            played_knockout: HashMap::new(),
         }
     }
 
@@ -118,6 +122,7 @@ impl World {
         }
 
         self.played.clear();
+        self.played_knockout.clear();
         for (letter, members) in &self.groups {
             let member_names: Vec<&str> = members.iter().map(|&i| self.teams[i].as_str()).collect();
             for pm in &live.played_matches {
@@ -142,7 +147,24 @@ impl World {
             }
         }
 
-        let matches_updated = self.played.len();
+        for km in &live.knockout_matches {
+            let Some(&ta) = self.idx.get(&km.team_a) else {
+                continue;
+            };
+            let Some(&tb) = self.idx.get(&km.team_b) else {
+                continue;
+            };
+            let Some(&winner) = self.idx.get(&km.winner) else {
+                continue;
+            };
+            if winner != ta && winner != tb {
+                continue;
+            }
+            self.played_knockout
+                .insert((ta.min(tb), ta.max(tb)), winner);
+        }
+
+        let matches_updated = self.played.len() + self.played_knockout.len();
         tracing::info!(
             "World updated from live data: {} Elo ratings, {} played matches applied",
             elo_updated,
@@ -363,6 +385,21 @@ impl World {
         }
     }
 
+    fn ko_winner(&self, ta: usize, tb: usize, rng: &mut SmallRng) -> (usize, usize) {
+        let key = (ta.min(tb), ta.max(tb));
+        if let Some(&winner) = self.played_knockout.get(&key) {
+            let loser = if winner == ta { tb } else { ta };
+            return (winner, loser);
+        }
+
+        let (_, _, wa, _) = self.ko_match(ta, tb, rng, true);
+        if wa {
+            (ta, tb)
+        } else {
+            (tb, ta)
+        }
+    }
+
     pub fn simulate_one(&self, rng: &mut SmallRng) -> SingleSimResult {
         let _letters: Vec<String> = self.groups.iter().map(|(l, _)| l.clone()).collect();
         let mut slot_team: HashMap<String, usize> = HashMap::new();
@@ -409,6 +446,7 @@ impl World {
 
         let mut winners: HashMap<u32, usize> = HashMap::new();
         let mut losers: HashMap<u32, usize> = HashMap::new();
+        let mut matchups: HashMap<u32, (usize, usize)> = HashMap::new();
         let mut r32_teams: Vec<usize> = Vec::new();
 
         for (m, sa, sb) in data::r32() {
@@ -426,41 +464,46 @@ impl World {
             };
             r32_teams.push(ta);
             r32_teams.push(tb);
-            let (_, _, wa, _wb) = self.ko_match(ta, tb, rng, true);
-            winners.insert(m, if wa { ta } else { tb });
+            matchups.insert(m, (ta, tb));
+            let (winner, loser) = self.ko_winner(ta, tb, rng);
+            winners.insert(m, winner);
+            losers.insert(m, loser);
         }
 
         for (m, a, b) in data::r16() {
             let ta = winners[&a];
             let tb = winners[&b];
-            let (_, _, wa, _wb) = self.ko_match(ta, tb, rng, true);
-            winners.insert(m, if wa { ta } else { tb });
-            losers.insert(m, if wa { tb } else { ta });
+            matchups.insert(m, (ta, tb));
+            let (winner, loser) = self.ko_winner(ta, tb, rng);
+            winners.insert(m, winner);
+            losers.insert(m, loser);
         }
         for (m, a, b) in data::qf() {
             let ta = winners[&a];
             let tb = winners[&b];
-            let (_, _, wa, _wb) = self.ko_match(ta, tb, rng, true);
-            winners.insert(m, if wa { ta } else { tb });
-            losers.insert(m, if wa { tb } else { ta });
+            matchups.insert(m, (ta, tb));
+            let (winner, loser) = self.ko_winner(ta, tb, rng);
+            winners.insert(m, winner);
+            losers.insert(m, loser);
         }
         for (m, a, b) in data::sf() {
             let ta = winners[&a];
             let tb = winners[&b];
-            let (_, _, wa, _wb) = self.ko_match(ta, tb, rng, true);
-            winners.insert(m, if wa { ta } else { tb });
-            losers.insert(m, if wa { tb } else { ta });
+            matchups.insert(m, (ta, tb));
+            let (winner, loser) = self.ko_winner(ta, tb, rng);
+            winners.insert(m, winner);
+            losers.insert(m, loser);
         }
 
         let sf_a = winners[&101];
         let sf_b = winners[&102];
-        let (_, _, wa, _) = self.ko_match(sf_a, sf_b, rng, true);
-        let champion = if wa { sf_a } else { sf_b };
+        matchups.insert(data::FINAL, (sf_a, sf_b));
+        let (champion, runner_up) = self.ko_winner(sf_a, sf_b, rng);
         winners.insert(data::FINAL, champion);
+        losers.insert(data::FINAL, runner_up);
         let finalists = (sf_a.min(sf_b), sf_a.max(sf_b));
 
-        let (_, _, twa, _) = self.ko_match(losers[&101], losers[&102], rng, true);
-        let third_place = if twa { losers[&101] } else { losers[&102] };
+        let (third_place, _) = self.ko_winner(losers[&101], losers[&102], rng);
 
         SingleSimResult {
             champion,
@@ -470,6 +513,7 @@ impl World {
             r16_teams: data::r32().iter().map(|(m, _, _)| winners[m]).collect(),
             r32_teams,
             slot_winners: winners.clone(),
+            slot_matchups: matchups,
             third_place,
             group_order: slot_team,
             qual_thirds: qual,
@@ -567,6 +611,27 @@ impl World {
             })
             .collect();
 
+        let score_representative = |r: &SingleSimResult| -> (usize, usize) {
+            let mode_matches = r
+                .slot_winners
+                .iter()
+                .filter(|(m, team)| slot_mode.get(m) == Some(team))
+                .count();
+            let champion_matches = usize::from(slot_mode.get(&data::FINAL) == Some(&r.champion));
+            (mode_matches, champion_matches)
+        };
+        let mut representative = &results[0];
+        let mut best_score = score_representative(representative);
+        for r in results.iter().skip(1) {
+            let score = score_representative(r);
+            if score > best_score {
+                representative = r;
+                best_score = score;
+            }
+        }
+        let representative_slot_winners = representative.slot_winners.clone();
+        let representative_slot_matchups = representative.slot_matchups.clone();
+
         SimResults {
             n_sims: n,
             champ_counts,
@@ -577,6 +642,8 @@ impl World {
             r32_counts,
             group_stats,
             slot_mode,
+            representative_slot_winners,
+            representative_slot_matchups,
             final_pairs,
             third_place_counts,
         }
@@ -591,6 +658,7 @@ pub struct SingleSimResult {
     pub r16_teams: Vec<usize>,
     pub r32_teams: Vec<usize>,
     pub slot_winners: HashMap<u32, usize>,
+    pub slot_matchups: HashMap<u32, (usize, usize)>,
     pub third_place: usize,
     pub group_order: HashMap<String, usize>,
     pub qual_thirds: Vec<String>,
@@ -609,6 +677,22 @@ mod tests {
         for (_, members) in &world.groups {
             assert_eq!(members.len(), 4);
         }
+    }
+
+    #[test]
+    fn ko_winner_uses_recorded_knockout_result() {
+        let mut world = World::new();
+        let germany = world.idx["Germany"];
+        let paraguay = world.idx["Paraguay"];
+        world
+            .played_knockout
+            .insert((germany.min(paraguay), germany.max(paraguay)), paraguay);
+
+        let mut rng = SmallRng::seed_from_u64(1);
+        let (winner, loser) = world.ko_winner(germany, paraguay, &mut rng);
+
+        assert_eq!(winner, paraguay);
+        assert_eq!(loser, germany);
     }
 
     #[test]
@@ -671,6 +755,32 @@ mod tests {
 
         let r32_total: usize = results.r32_counts.values().sum();
         assert_eq!(r32_total, config.n_sims * 32);
+    }
+
+    #[test]
+    fn representative_bracket_is_coherent() {
+        let world = World::new();
+        let config = SimConfig {
+            n_sims: 500,
+            seed: 11,
+            elo_overrides: HashMap::new(),
+        };
+        let results = world.simulate(&config);
+        let winners = &results.representative_slot_winners;
+
+        for (m, a, b) in crate::data::r16() {
+            assert!(winners[&m] == winners[&a] || winners[&m] == winners[&b]);
+        }
+        for (m, a, b) in crate::data::qf() {
+            assert!(winners[&m] == winners[&a] || winners[&m] == winners[&b]);
+        }
+        for (m, a, b) in crate::data::sf() {
+            assert!(winners[&m] == winners[&a] || winners[&m] == winners[&b]);
+        }
+        assert!(
+            winners[&crate::data::FINAL] == winners[&101]
+                || winners[&crate::data::FINAL] == winners[&102]
+        );
     }
 
     #[test]

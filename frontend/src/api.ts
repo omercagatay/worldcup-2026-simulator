@@ -19,7 +19,9 @@ export interface GroupRow {
 
 export interface BracketSlot {
   match_id: number;
-  team: string;
+  team_a: string;
+  team_b: string;
+  winner: string;
 }
 
 export interface FinalPair {
@@ -84,6 +86,15 @@ export interface LiveData {
     score_a: number;
     team_b: string;
     score_b: number;
+  }[];
+  knockout_matches?: {
+    team_a: string;
+    score_a: number;
+    team_b: string;
+    score_b: number;
+    winner: string;
+    penalty_score_a?: number | null;
+    penalty_score_b?: number | null;
   }[];
   goalscorers: {
     player: string;

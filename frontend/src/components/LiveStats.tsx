@@ -5,6 +5,7 @@ export function LiveStats({ liveData }: { liveData: LiveData }) {
   const topElo = Object.entries(liveData.elo_ratings)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10);
+  const knockoutMatches = liveData.knockout_matches ?? [];
 
   return (
     <section className="section live-stats">
@@ -74,7 +75,7 @@ export function LiveStats({ liveData }: { liveData: LiveData }) {
         </div>
 
         <div className="live-card">
-          <h3>Played Matches ({liveData.played_matches.length})</h3>
+          <h3>Group Matches ({liveData.played_matches.length})</h3>
           <div className="matches-list">
             {liveData.played_matches.map((m, i) => (
               <div key={i} className="match-row">
@@ -86,6 +87,29 @@ export function LiveStats({ liveData }: { liveData: LiveData }) {
             ))}
           </div>
         </div>
+        {knockoutMatches.length > 0 && (
+          <div className="live-card">
+            <h3>Knockout Results ({knockoutMatches.length})</h3>
+            <div className="matches-list">
+              {knockoutMatches.map((m, i) => {
+                const penaltyText =
+                  m.penalty_score_a != null && m.penalty_score_b != null
+                    ? ` (${m.penalty_score_a}–${m.penalty_score_b} pens)`
+                    : "";
+                return (
+                  <div key={i} className="match-row">
+                    <span className="match-group">KO</span>
+                    <span className="match-teams">
+                      {m.team_a} <strong>{m.score_a}–{m.score_b}</strong> {m.team_b}
+                      {penaltyText} · <strong>{m.winner}</strong> advanced
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
       </div>
     </section>
   );

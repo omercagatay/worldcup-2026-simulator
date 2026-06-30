@@ -41,7 +41,9 @@ pub struct GroupRow {
 #[derive(Serialize, Clone)]
 pub struct BracketSlot {
     pub match_id: u32,
-    pub team: String,
+    pub team_a: String,
+    pub team_b: String,
+    pub winner: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -119,19 +121,24 @@ pub fn build_response(
         .collect();
 
     let mut bracket: Vec<BracketSlot> = results
-        .slot_mode
+        .representative_slot_matchups
         .iter()
-        .map(|(&m, &i)| BracketSlot {
-            match_id: m,
-            team: teams[i].clone(),
+        .filter_map(|(&m, &(a, b))| {
+            let winner = *results.representative_slot_winners.get(&m)?;
+            Some(BracketSlot {
+                match_id: m,
+                team_a: teams[a].clone(),
+                team_b: teams[b].clone(),
+                winner: teams[winner].clone(),
+            })
         })
         .collect();
     bracket.sort_by_key(|b| b.match_id);
 
-    let consensus_champion = bracket
-        .iter()
-        .find(|b| b.match_id == crate::data::FINAL)
-        .map(|b| b.team.clone())
+    let consensus_champion = results
+        .slot_mode
+        .get(&crate::data::FINAL)
+        .map(|&i| teams[i].clone())
         .unwrap_or_default();
 
     let mut final_pairs: Vec<FinalPair> = results
