@@ -12,6 +12,7 @@ RUN mkdir src && echo "fn main() {}" > src/main.rs \
            target/release/.fingerprint/wc2026_sim* target/release/incremental/wc2026_sim*
 
 # Real build: only our crate recompiles; dependencies come from the cached layer.
+COPY data/ ./data/
 COPY src/ ./src/
 RUN cargo build --release
 

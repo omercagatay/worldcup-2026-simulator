@@ -1,12 +1,3 @@
-mod data;
-mod handlers;
-mod llm;
-mod models;
-mod rate_limit;
-mod scraper;
-mod sim;
-mod validation;
-
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -14,18 +5,15 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use tower_http::{
-    cors::CorsLayer,
-    limit::RequestBodyLimitLayer,
-    services::ServeDir,
-};
+use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer, services::ServeDir};
 use tracing_subscriber::EnvFilter;
 
-use rate_limit::RateLimitLayer;
-
-use handlers::AppState;
-use sim::World;
 use tokio::sync::RwLock;
+use wc2026_sim::{
+    handlers::{self, AppState},
+    rate_limit::RateLimitLayer,
+    sim::World,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
