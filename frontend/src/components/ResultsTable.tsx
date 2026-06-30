@@ -3,8 +3,7 @@ import type { TeamRow } from "../api";
 const rankClass = (i: number) =>
   i === 0 ? "rank-1" : i === 1 ? "rank-2" : i === 2 ? "rank-3" : "";
 
-const medal = (i: number) =>
-  i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}`;
+const medal = (i: number) => `${i + 1}`;
 
 export function ResultsTable({ teams }: { teams: TeamRow[] }) {
   const maxWin = Math.max(...teams.map((t) => t.win_pct), 1);

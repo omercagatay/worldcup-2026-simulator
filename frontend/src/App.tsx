@@ -66,22 +66,22 @@ export default function App() {
   const liveMatchCount = liveData
     ? liveData.played_matches.length + (liveData.knockout_matches?.length ?? 0)
     : 0;
+  const topChampion = data?.top_champions[0];
+  const topScorer = liveData?.goalscorers[0];
+  const topFinal = data?.top_finals[0];
 
   return (
     <div className="app">
-      <header className="header">
-        <h1>World Cup 2026 — Monte Carlo Simulator</h1>
-        <p className="subtitle">
-          Elo → Poisson model · {data ? `${data.n_sims.toLocaleString()} simulations` : "ready to run"}
-          {data?.scenario_applied && (
-            <span className="scenario-badge"> Scenario: {data.scenario_applied}</span>
-          )}
-          {liveData && (
-            <span className="live-badge">
-              {" · "}Live: {Object.keys(liveData.elo_ratings).length} Elo ratings, {liveMatchCount} matches
-            </span>
-          )}
-        </p>
+      <header className="header dashboard-header">
+        <div>
+          <span className="eyebrow">Forecast console</span>
+          <h1>World Cup 2026 Simulator</h1>
+        </div>
+        <div className="status-pills">
+          <span className="status-pill">{data ? `${data.n_sims.toLocaleString()} sims` : "Ready"}</span>
+          {liveData && <span className="status-pill live">Live {liveMatchCount} matches</span>}
+          {data?.scenario_applied && <span className="status-pill scenario">Scenario applied</span>}
+        </div>
       </header>
 
       <div className="controls">
@@ -125,6 +125,31 @@ export default function App() {
           <p>Click <strong>Run Simulation</strong> to start.</p>
           <p className="empty-hint">50,000 tournaments will be simulated in parallel.</p>
         </div>
+      )}
+
+      {(data || liveData) && (
+        <section className="summary-grid">
+          <div className="summary-item primary">
+            <span className="summary-label">Champion Mode</span>
+            <strong>{topChampion?.team ?? "-"}</strong>
+            <span>{topChampion ? `${topChampion.win_pct.toFixed(2)}% win` : "Run a simulation"}</span>
+          </div>
+          <div className="summary-item">
+            <span className="summary-label">Golden Boot</span>
+            <strong>{topScorer?.player ?? "-"}</strong>
+            <span>{topScorer ? `${topScorer.goals} goals · ${topScorer.country}` : "Refresh live data"}</span>
+          </div>
+          <div className="summary-item">
+            <span className="summary-label">Top Final</span>
+            <strong>{topFinal ? `${topFinal.a} vs ${topFinal.b}` : "-"}</strong>
+            <span>{topFinal ? `${topFinal.pct.toFixed(2)}% of sims` : "Run a simulation"}</span>
+          </div>
+          <div className="summary-item">
+            <span className="summary-label">Live Coverage</span>
+            <strong>{liveData ? liveMatchCount : "-"}</strong>
+            <span>{liveData ? `${Object.keys(liveData.elo_ratings).length} Elo ratings` : "Not loaded"}</span>
+          </div>
+        </section>
       )}
 
       {liveData && (

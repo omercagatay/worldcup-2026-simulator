@@ -100,6 +100,7 @@ export interface LiveData {
     player: string;
     country: string;
     goals: number;
+    active?: boolean;
   }[];
   tournament_stats: {
     matches_played: number;

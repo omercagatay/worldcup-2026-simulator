@@ -44,6 +44,7 @@ pub struct Goalscorer {
     pub player: String,
     pub country: String,
     pub goals: u16,
+    pub active: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -355,7 +356,6 @@ fn clean_team_name(title: &str) -> String {
         .trim()
         .to_string()
 }
-
 fn parse_goalscorers(html: &str) -> Vec<Goalscorer> {
     let mut scorers = Vec::new();
 
@@ -364,47 +364,77 @@ fn parse_goalscorers(html: &str) -> Vec<Goalscorer> {
 
     if let (Some(start), Some(end)) = (goalscorers_start, discipline_start) {
         let section = &html[start..end];
+        let block_re = Regex::new(
+            r#"(?s)<p>\s*<b>(\d+)\s+goals?</b>.*?</p>\s*<div[^>]*class="[^"]*div-col[^"]*"[^>]*>(.*?)</div>"#,
+        )
+        .unwrap();
 
-        let goals_header_re = Regex::new(r"<b>(\d+)\s*goals?</b>").unwrap();
-        let li_re = Regex::new(r"<li>(.*?)</li>").unwrap();
-        let flag_re = Regex::new(r#"<a[^>]*title="([^"]*national[^"]*)"[^>]*>"#).unwrap();
-        let player_re = Regex::new(r#"<a[^>]*href="/wiki/([^"]*)"[^>]*>([^<]*)</a>"#).unwrap();
-
-        let mut current_goals: u16 = 0;
-        for chunk in section.split("<b>") {
-            if let Some(caps) = goals_header_re.captures(&format!("<b>{}", chunk)) {
-                current_goals = caps[1].parse::<u16>().unwrap_or(0);
+        for caps in block_re.captures_iter(section) {
+            let goals = caps[1].parse::<u16>().unwrap_or(0);
+            if goals == 0 {
+                continue;
             }
 
-            for li_caps in li_re.captures_iter(chunk) {
-                let li_html = &li_caps[1];
-
-                let country = flag_re
-                    .captures(li_html)
-                    .map(|c| clean_team_name(&c[1]))
-                    .unwrap_or_default();
-
-                let player = player_re
-                    .captures_iter(li_html)
-                    .filter(|c| !c[1].contains("national"))
-                    .map(|c| c[2].trim().to_string())
-                    .next()
-                    .unwrap_or_else(|| strip_html(li_html));
-
-                if !player.is_empty() && !country.is_empty() && current_goals > 0 {
-                    scorers.push(Goalscorer {
-                        player,
-                        country,
-                        goals: current_goals,
-                    });
-                }
+            for scorer in parse_goalscorer_block(&caps[2], goals) {
+                scorers.push(scorer);
             }
         }
     }
 
-    scorers.sort_by_key(|b| std::cmp::Reverse(b.goals));
+    scorers.sort_by(|a, b| {
+        b.goals
+            .cmp(&a.goals)
+            .then_with(|| a.country.cmp(&b.country))
+            .then_with(|| a.player.cmp(&b.player))
+    });
     tracing::info!("Parsed {} goalscorers from Wikipedia HTML", scorers.len());
     scorers
+}
+
+fn parse_goalscorer_block(block_html: &str, goals: u16) -> Vec<Goalscorer> {
+    let fragment = Html::parse_fragment(block_html);
+    let item_sel = Selector::parse("li").expect("valid selector");
+    let link_sel = Selector::parse("a[title]").expect("valid selector");
+
+    fragment
+        .select(&item_sel)
+        .filter_map(|item| {
+            let item_html = item.html();
+            let mut country = String::new();
+            let mut player = String::new();
+
+            for link in item.select(&link_sel) {
+                let title = link.value().attr("title").unwrap_or_default();
+                if title.contains("national") && title.contains("team") {
+                    country = clean_team_name(title);
+                    continue;
+                }
+
+                if player.is_empty() {
+                    player = clean_player_name(&link.text().collect::<String>());
+                }
+            }
+
+            if player.is_empty() || country.is_empty() {
+                None
+            } else {
+                Some(Goalscorer {
+                    player,
+                    country,
+                    goals,
+                    active: item_html.contains("<b>"),
+                })
+            }
+        })
+        .collect()
+}
+
+fn clean_player_name(name: &str) -> String {
+    name.replace("\u{a0}", " ")
+        .replace("&#160;", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn parse_group_standings(html: &str) -> Vec<GroupStanding> {
@@ -482,28 +512,58 @@ fn parse_group_standings(html: &str) -> Vec<GroupStanding> {
 }
 
 fn parse_tournament_stats(html: &str) -> Option<TournamentStats> {
-    let matches_re = Regex::new(r"matches[_-]played[^>]*>.*?(\d+)").unwrap();
-    let goals_re = Regex::new(r"goals[_-]scored[^>]*>.*?(\d+)").unwrap();
-    let attendance_re = Regex::new(r"[Aa]tendance[^>]*>.*?([\d,]+)").unwrap();
-    let scorer_link_re = Regex::new(
-        r#"[Tt]op\s*scorer.*?<a[^>]*title="([^"]*national[^"]*)"[^>]*>.*?<a[^>]*>([^<]*)</a>"#,
-    )
-    .unwrap();
+    let infobox_re =
+        Regex::new(r#"(?s)<table[^>]*class="[^"]*infobox[^"]*"[^>]*>(.*?)</table>"#).unwrap();
+    let row_re = Regex::new(r#"(?s)<tr>(.*?)</tr>"#).unwrap();
+    let header_re = Regex::new(r#"(?s)<th[^>]*>(.*?)</th>"#).unwrap();
+    let data_re = Regex::new(r#"(?s)<td[^>]*>(.*?)</td>"#).unwrap();
+    let number_re = Regex::new(r"([0-9][0-9,]*)").unwrap();
 
-    let matches_played = matches_re
+    let infobox = infobox_re
         .captures(html)
-        .and_then(|c| c[1].parse::<u16>().ok());
-    let goals_scored = goals_re
-        .captures(html)
-        .and_then(|c| c[1].parse::<u16>().ok());
-    let attendance = attendance_re
-        .captures(html)
-        .and_then(|c| c[1].replace(',', "").parse::<u64>().ok());
-    let top_scorer = scorer_link_re
-        .captures(html)
-        .map(|c| c[2].replace("&#39;", "\x27").trim().to_string());
+        .map(|c| c[1].to_string())
+        .unwrap_or_else(|| html.to_string());
 
-    if matches_played.is_some() || goals_scored.is_some() {
+    let mut matches_played = None;
+    let mut goals_scored = None;
+    let mut attendance = None;
+    let mut top_scorer = None;
+
+    for row_caps in row_re.captures_iter(&infobox) {
+        let row = &row_caps[1];
+        let label = header_re
+            .captures(row)
+            .map(|c| normalize_cell_text(&c[1]))
+            .unwrap_or_default();
+        let value_html = data_re.captures(row).map(|c| c[1].to_string());
+        let Some(value_html) = value_html else {
+            continue;
+        };
+        let value = normalize_cell_text(&value_html);
+        let label_lower = label.to_lowercase();
+
+        if label_lower.contains("matches played") {
+            matches_played = number_re
+                .captures(&value)
+                .and_then(|c| c[1].replace(",", "").parse::<u16>().ok());
+        } else if label_lower.contains("goals scored") {
+            goals_scored = number_re
+                .captures(&value)
+                .and_then(|c| c[1].replace(",", "").parse::<u16>().ok());
+        } else if label_lower.contains("attendance") {
+            attendance = number_re
+                .captures(&value)
+                .and_then(|c| c[1].replace(",", "").parse::<u64>().ok());
+        } else if label_lower.contains("top scorer") {
+            top_scorer = Some(parse_top_scorer_value(&value_html).unwrap_or(value));
+        }
+    }
+
+    if matches_played.is_some()
+        || goals_scored.is_some()
+        || attendance.is_some()
+        || top_scorer.is_some()
+    {
         Some(TournamentStats {
             matches_played: matches_played.unwrap_or(0),
             goals_scored: goals_scored.unwrap_or(0),
@@ -513,6 +573,41 @@ fn parse_tournament_stats(html: &str) -> Option<TournamentStats> {
     } else {
         None
     }
+}
+
+fn parse_top_scorer_value(html: &str) -> Option<String> {
+    let fragment = Html::parse_fragment(html);
+    let link_sel = Selector::parse("a[title]").ok()?;
+    let player = fragment
+        .select(&link_sel)
+        .find(|link| {
+            let title = link.value().attr("title").unwrap_or_default();
+            !(title.contains("national") && title.contains("team"))
+        })
+        .map(|link| clean_player_name(&link.text().collect::<String>()))
+        .filter(|name| !name.is_empty())?;
+
+    let value = normalize_cell_text(html);
+    let goals_re = Regex::new(r"\((\d+\s+goals?)\)").ok()?;
+    let goals = goals_re
+        .captures(&value)
+        .map(|c| c[1].to_string())
+        .unwrap_or_default();
+
+    if goals.is_empty() {
+        Some(player)
+    } else {
+        Some(format!("{} ({})", player, goals))
+    }
+}
+
+fn normalize_cell_text(html: &str) -> String {
+    strip_html(html)
+        .replace("\u{a0}", " ")
+        .replace("&#160;", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn chrono_now() -> String {
@@ -579,6 +674,63 @@ mod tests {
         assert_eq!(matches[0].score_a, 2);
         assert_eq!(matches[0].score_b, 1);
         assert_eq!(matches[0].group, "A");
+    }
+
+    #[test]
+    fn parse_goalscorers_extracts_current_goal_blocks() {
+        let html = r#"
+        <h3 id="Goalscorers">Goalscorers</h3>
+        <p><b>6 goals</b></p><div class="div-col">
+          <ul><li><span><a title="Argentina national football team">flag</a> <b><a href="/wiki/Lionel_Messi" title="Lionel Messi">Lionel Messi</a></b></span></li></ul>
+        </div>
+        <p><b>4 goals</b></p><div class="div-col">
+          <ul>
+            <li><span><a title="Brazil national football team">flag</a> <b><a href="/wiki/Vinicius" title="Vinícius Júnior">Vinícius&#160;Júnior</a></b></span></li>
+            <li><span><a title="France national football team">flag</a> <b><a href="/wiki/Kylian_Mbappe" title="Kylian Mbappé">Kylian Mbappé</a></b></span></li>
+            <li><span><a title="Norway national football team">flag</a> <b><a href="/wiki/Erling_Haaland" title="Erling Haaland">Erling Haaland</a></b></span></li>
+          </ul>
+        </div>
+        <p><b>3 goals</b></p><div class="div-col">
+          <ul><li><span><a title="Germany national football team">flag</a> <a href="/wiki/Kai_Havertz" title="Kai Havertz">Kai Havertz</a></span></li></ul>
+        </div>
+        <h3 id="Discipline">Discipline</h3>
+        "#;
+
+        let scorers = parse_goalscorers(html);
+        assert_eq!(scorers[0].player, "Lionel Messi");
+        assert_eq!(scorers[0].country, "Argentina");
+        assert_eq!(scorers[0].goals, 6);
+        assert!(scorers[0].active);
+        assert!(scorers
+            .iter()
+            .any(|s| s.player == "Vinícius Júnior" && s.goals == 4));
+        assert!(scorers
+            .iter()
+            .any(|s| s.player == "Kylian Mbappé" && s.goals == 4));
+        assert!(scorers
+            .iter()
+            .any(|s| s.player == "Erling Haaland" && s.goals == 4));
+        let havertz = scorers.iter().find(|s| s.player == "Kai Havertz").unwrap();
+        assert_eq!(havertz.goals, 3);
+        assert!(!havertz.active);
+    }
+
+    #[test]
+    fn parse_tournament_stats_reads_infobox_labels() {
+        let html = r#"
+        <table class="infobox vcalendar"><tbody>
+          <tr><th scope="row" class="infobox-label">Matches&#160;played</th><td class="infobox-data">76</td></tr>
+          <tr><th scope="row" class="infobox-label">Goals scored</th><td class="infobox-data">223&#160;(2.93 per match)</td></tr>
+          <tr><th scope="row" class="infobox-label">Attendance</th><td class="infobox-data">4,713,786&#160;(62,024 per match)</td></tr>
+          <tr><th scope="row" class="infobox-label">Top scorer</th><td class="infobox-data"><a title="Argentina national football team">flag</a> <a href="/wiki/Lionel_Messi" title="Lionel Messi">Lionel Messi</a> <span>(6 goals)</span></td></tr>
+        </tbody></table>
+        "#;
+
+        let stats = parse_tournament_stats(html).unwrap();
+        assert_eq!(stats.matches_played, 76);
+        assert_eq!(stats.goals_scored, 223);
+        assert_eq!(stats.attendance, 4_713_786);
+        assert_eq!(stats.top_scorer, "Lionel Messi (6 goals)");
     }
 
     #[test]

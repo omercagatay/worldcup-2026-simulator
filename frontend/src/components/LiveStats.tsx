@@ -41,11 +41,12 @@ export function LiveStats({ liveData }: { liveData: LiveData }) {
           <h3>Top Goalscorers</h3>
           <div className="scorers-list">
             {topScorers.map((s, i) => (
-              <div key={i} className="scorer-row">
+              <div key={i} className={`scorer-row${s.active ? " scorer-active" : ""}`}>
                 <span className="scorer-rank">{i + 1}</span>
                 <span className="scorer-name">{s.player}</span>
                 <span className="scorer-country">{s.country}</span>
-                <span className={`scorer-goals ${s.goals >= 3 ? "scorer-top" : ""}`}>
+                {s.active && <span className="active-chip">Active</span>}
+                <span className={`scorer-goals ${s.goals >= 4 ? "scorer-top" : ""}`}>
                   {s.goals}
                 </span>
               </div>
