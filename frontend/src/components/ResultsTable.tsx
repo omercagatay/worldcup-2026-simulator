@@ -15,6 +15,7 @@ export function ResultsTable({ teams }: { teams: TeamRow[] }) {
           <th>#</th>
           <th>Team</th>
           <th className="bar-cell">Win Probability</th>
+          <th>Odds</th>
           <th>Final%</th>
           <th>SF%</th>
           <th>QF%</th>
@@ -37,6 +38,9 @@ export function ResultsTable({ teams }: { teams: TeamRow[] }) {
                 </div>
                 <span className="bar-value win-cell">{t.win_pct.toFixed(2)}</span>
               </div>
+            </td>
+            <td className="pct-cell odds-cell">
+              {t.win_odds != null ? t.win_odds.toFixed(2) : "—"}
             </td>
             <td className="pct-cell">{t.final_pct.toFixed(2)}</td>
             <td className="pct-cell">{t.sf_pct.toFixed(2)}</td>

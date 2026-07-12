@@ -74,12 +74,11 @@ pub async fn scenario(
     Ok(Json(resp))
 }
 
-pub async fn refresh_live_data(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<LiveData>, (StatusCode, String)> {
-    let live = scraper::fetch_all()
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Scrape error: {e}")))?;
+/// Scrape live data, apply it to the shared `World`, and cache the raw
+/// result. Shared by the `/api/refresh` handler and the background
+/// refresh task spawned in `main.rs`.
+pub async fn perform_live_refresh(state: &AppState) -> anyhow::Result<LiveData> {
+    let live = scraper::fetch_all().await?;
 
     let (elo_n, match_n) = {
         let mut world = state.world.write().await;
@@ -93,6 +92,15 @@ pub async fn refresh_live_data(
     );
 
     *state.live_data.write().await = Some(live.clone());
+    Ok(live)
+}
+
+pub async fn refresh_live_data(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<LiveData>, (StatusCode, String)> {
+    let live = perform_live_refresh(&state)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Scrape error: {e}")))?;
     Ok(Json(live))
 }
 

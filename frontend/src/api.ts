@@ -1,6 +1,7 @@
 export interface TeamRow {
   team: string;
   win_pct: number;
+  win_odds: number | null;
   final_pct: number;
   sf_pct: number;
   qf_pct: number;
@@ -113,6 +114,13 @@ export interface LiveData {
 
 export async function refreshLiveData(): Promise<LiveData> {
   const resp = await fetch(`${API_BASE}/api/refresh`, { method: "POST" });
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json();
+}
+
+/** Cached live data (kept fresh by the backend's background refresh). */
+export async function getLiveData(): Promise<LiveData | null> {
+  const resp = await fetch(`${API_BASE}/api/live`);
   if (!resp.ok) throw new Error(await resp.text());
   return resp.json();
 }

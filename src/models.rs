@@ -21,6 +21,9 @@ pub struct ScenarioRequest {
 pub struct TeamRow {
     pub team: String,
     pub win_pct: f64,
+    /// Fair decimal odds implied by `win_pct`; `None` when the team never
+    /// won the tournament in any simulated trial.
+    pub win_odds: Option<f64>,
     pub final_pct: f64,
     pub sf_pct: f64,
     pub qf_pct: f64,
@@ -83,6 +86,10 @@ pub fn build_response(
         .map(|(i, name)| TeamRow {
             team: name.clone(),
             win_pct: pct(results.champ_counts.get(&i).copied(), n),
+            win_odds: crate::odds::decimal_odds_from_pct(pct(
+                results.champ_counts.get(&i).copied(),
+                n,
+            )),
             final_pct: pct(results.final_counts.get(&i).copied(), n),
             sf_pct: pct(results.sf_counts.get(&i).copied(), n),
             qf_pct: pct(results.qf_counts.get(&i).copied(), n),
@@ -163,6 +170,7 @@ pub fn build_response(
         .map(|&(i, c)| TeamRow {
             team: teams[i].clone(),
             win_pct: c as f64 / n * 100.0,
+            win_odds: crate::odds::decimal_odds_from_pct(c as f64 / n * 100.0),
             final_pct: pct(results.final_counts.get(&i).copied(), n),
             sf_pct: pct(results.sf_counts.get(&i).copied(), n),
             qf_pct: pct(results.qf_counts.get(&i).copied(), n),

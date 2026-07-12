@@ -1,8 +1,9 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   runSimulation,
   runScenario,
   refreshLiveData,
+  getLiveData,
   type SimResponse,
   type LiveData,
 } from "./api";
@@ -55,6 +56,23 @@ export default function App() {
     [nSims, seed]
   );
 
+  // On first load: hydrate cached live data (the backend refreshes it in
+  // the background) and kick off an initial forecast so the dashboard is
+  // populated without any clicks.
+  const bootedRef = useRef(false);
+  useEffect(() => {
+    if (bootedRef.current) return;
+    bootedRef.current = true;
+    getLiveData()
+      .then((live) => {
+        if (live) setLiveData(live);
+      })
+      .catch(() => {
+        /* cached live data is optional; manual refresh still available */
+      });
+    void handleSimulate();
+  }, [handleSimulate]);
+
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     setError(null);
@@ -72,6 +90,14 @@ export default function App() {
   const liveMatchCount = liveData
     ? liveData.played_matches.length + (liveData.knockout_matches?.length ?? 0)
     : 0;
+  const lastUpdated = (() => {
+    const raw = liveData?.fetched_at;
+    if (!raw?.startsWith("unix:")) return null;
+    const secs = Number(raw.slice(5));
+    return Number.isFinite(secs) && secs > 0
+      ? new Date(secs * 1000).toLocaleString()
+      : null;
+  })();
   const topChampion = data?.top_champions[0];
   const topScorer = liveData?.goalscorers[0];
   const topFinal = data?.top_finals[0];
@@ -88,6 +114,7 @@ export default function App() {
         <div className="status-pills">
           <span className="status-pill">{data ? `${data.n_sims.toLocaleString()} sims` : "Ready"}</span>
           {liveData && <span className="status-pill live">Live {liveMatchCount} matches</span>}
+          {lastUpdated && <span className="status-pill">Updated {lastUpdated}</span>}
           {data?.scenario_applied && <span className="status-pill scenario">Scenario applied</span>}
         </div>
       </header>
@@ -186,6 +213,8 @@ export default function App() {
                   <div className="champion-name">{data.consensus_champion}</div>
                   <div className="champion-odds">
                     {data.top_champions[0]?.win_pct.toFixed(2)}% win rate
+                    {data.top_champions[0]?.win_odds != null &&
+                      ` · ${data.top_champions[0].win_odds.toFixed(2)} decimal odds`}
                     {" · "}
                     {data.n_sims.toLocaleString()} simulations
                   </div>

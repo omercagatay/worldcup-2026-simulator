@@ -36,6 +36,35 @@ async fn main() -> anyhow::Result<()> {
         live_data: Arc::new(RwLock::new(None)),
     });
 
+    // Keep the simulation current with the real tournament: refresh live
+    // data immediately on startup, then on an interval. LIVE_REFRESH_MINUTES=0
+    // disables the background task (manual /api/refresh still works).
+    let refresh_minutes: u64 = std::env::var("LIVE_REFRESH_MINUTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+    if refresh_minutes > 0 {
+        let bg_state = state.clone();
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(refresh_minutes * 60));
+            loop {
+                interval.tick().await;
+                match handlers::perform_live_refresh(&bg_state).await {
+                    Ok(live) => tracing::info!(
+                        "Background live refresh ok: {} group matches, {} knockout matches",
+                        live.played_matches.len(),
+                        live.knockout_matches.len()
+                    ),
+                    Err(e) => tracing::warn!("Background live refresh failed: {e:#}"),
+                }
+            }
+        });
+        tracing::info!("Background live refresh enabled (every {refresh_minutes} min)");
+    } else {
+        tracing::info!("Background live refresh disabled (LIVE_REFRESH_MINUTES=0)");
+    }
+
     let app = Router::new()
         .route("/api/health", get(handlers::health))
         .route("/api/live", get(handlers::get_live_data))
