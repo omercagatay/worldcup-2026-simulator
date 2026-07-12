@@ -615,6 +615,23 @@ pub fn third_place_slots() -> HashMap<u32, Vec<&'static str>> {
     ])
 }
 
+/// FIFA's actual third-place slot allocation in the real tournament,
+/// used whenever a trial's qualified thirds match the real set
+/// (B, D, E, F, I, J, K, L) — which is always the case now that all
+/// group results are recorded. Kept consistent with `third_place_slots`.
+pub fn actual_third_assignment() -> HashMap<u32, &'static str> {
+    HashMap::from([
+        (74u32, "D"), // Germany (1E) vs Paraguay
+        (77, "F"),    // France (1I) vs Sweden
+        (79, "E"),    // Mexico (1A) vs Ecuador
+        (80, "K"),    // England (1L) vs DR Congo
+        (81, "B"),    // United States (1D) vs Bosnia and Herzegovina
+        (82, "I"),    // Belgium (1G) vs Senegal
+        (85, "J"),    // Switzerland (1B) vs Algeria
+        (87, "L"),    // Colombia (1K) vs Ghana
+    ])
+}
+
 pub fn r32() -> Vec<(u32, &'static str, &'static str)> {
     vec![
         (73, "2A", "2B"),

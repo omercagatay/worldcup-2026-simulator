@@ -75,6 +75,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .merge(
             Router::new()
+                .route("/api/upcoming", get(handlers::upcoming))
+                .route_layer(RateLimitLayer::new(30, 60)),
+        )
+        .merge(
+            Router::new()
                 .route("/api/scenario", post(handlers::scenario))
                 .route_layer(RateLimitLayer::new(10, 60)),
         )

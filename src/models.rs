@@ -24,6 +24,8 @@ pub struct TeamRow {
     /// Fair decimal odds implied by `win_pct`; `None` when the team never
     /// won the tournament in any simulated trial.
     pub win_odds: Option<f64>,
+    /// Probability of winning the third-place playoff.
+    pub third_place_pct: f64,
     pub final_pct: f64,
     pub sf_pct: f64,
     pub qf_pct: f64,
@@ -47,6 +49,24 @@ pub struct BracketSlot {
     pub team_a: String,
     pub team_b: String,
     pub winner: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct UpcomingMatch {
+    pub match_id: u32,
+    pub round: String,
+    pub team_a: String,
+    pub team_b: String,
+    pub a_win_pct: f64,
+    pub b_win_pct: f64,
+    pub decided_in_90_pct: f64,
+    pub a_win_odds: Option<f64>,
+    pub b_win_odds: Option<f64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct UpcomingResponse {
+    pub matches: Vec<UpcomingMatch>,
 }
 
 #[derive(Serialize, Clone)]
@@ -90,6 +110,7 @@ pub fn build_response(
                 results.champ_counts.get(&i).copied(),
                 n,
             )),
+            third_place_pct: pct(results.third_place_counts.get(&i).copied(), n),
             final_pct: pct(results.final_counts.get(&i).copied(), n),
             sf_pct: pct(results.sf_counts.get(&i).copied(), n),
             qf_pct: pct(results.qf_counts.get(&i).copied(), n),
@@ -171,6 +192,7 @@ pub fn build_response(
             team: teams[i].clone(),
             win_pct: c as f64 / n * 100.0,
             win_odds: crate::odds::decimal_odds_from_pct(c as f64 / n * 100.0),
+            third_place_pct: pct(results.third_place_counts.get(&i).copied(), n),
             final_pct: pct(results.final_counts.get(&i).copied(), n),
             sf_pct: pct(results.sf_counts.get(&i).copied(), n),
             qf_pct: pct(results.qf_counts.get(&i).copied(), n),

@@ -46,7 +46,6 @@ pub struct SimResults {
     pub representative_slot_winners: HashMap<u32, usize>,
     pub representative_slot_matchups: HashMap<u32, (usize, usize)>,
     pub final_pairs: HashMap<(usize, usize), usize>,
-    #[allow(dead_code)]
     pub third_place_counts: HashMap<usize, usize>,
 }
 
@@ -491,6 +490,97 @@ impl World {
         }
     }
 
+    /// Real bracket matches whose pairing is already fixed by recorded
+    /// results but which haven't been played yet, in bracket order.
+    /// Returns `(match_id, round_label, team_a, team_b)`.
+    ///
+    /// The group stage is fully recorded, so one `simulate_one` pass yields
+    /// the real R32 pairings; from there only recorded knockout results
+    /// (`played_knockout`) advance teams. Includes the third-place playoff
+    /// once both semifinal losers are known.
+    pub fn upcoming_matches(&self) -> Vec<(u32, &'static str, usize, usize)> {
+        let mut rng = SmallRng::seed_from_u64(0);
+        let trial = self.simulate_one(&mut rng);
+
+        let mut progress = BracketProgress::default();
+        for (m, _, _) in data::r32() {
+            let (ta, tb) = trial.slot_matchups[&m];
+            self.resolve_bracket_match(m, "Round of 32", ta, tb, &mut progress);
+        }
+        let rounds = [
+            ("Round of 16", data::r16()),
+            ("Quarter-final", data::qf()),
+            ("Semi-final", data::sf()),
+        ];
+        for (label, matches) in rounds {
+            for (m, a, b) in matches {
+                if let (Some(&ta), Some(&tb)) = (progress.winners.get(&a), progress.winners.get(&b))
+                {
+                    self.resolve_bracket_match(m, label, ta, tb, &mut progress);
+                }
+            }
+        }
+        if let (Some(&la), Some(&lb)) = (progress.losers.get(&101), progress.losers.get(&102)) {
+            self.resolve_bracket_match(
+                data::THIRD_PLACE_MATCH,
+                "Third-place match",
+                la,
+                lb,
+                &mut progress,
+            );
+        }
+        if let (Some(&ta), Some(&tb)) = (progress.winners.get(&101), progress.winners.get(&102)) {
+            self.resolve_bracket_match(data::FINAL, "Final", ta, tb, &mut progress);
+        }
+        progress.upcoming
+    }
+
+    /// Record `m` as decided if its real result is known, otherwise add it
+    /// to the upcoming list.
+    fn resolve_bracket_match(
+        &self,
+        m: u32,
+        label: &'static str,
+        ta: usize,
+        tb: usize,
+        progress: &mut BracketProgress,
+    ) {
+        if let Some(&w) = self.played_knockout.get(&(ta.min(tb), ta.max(tb))) {
+            progress.winners.insert(m, w);
+            progress.losers.insert(m, if w == ta { tb } else { ta });
+        } else {
+            progress.upcoming.push((m, label, ta, tb));
+        }
+    }
+
+    /// Monte Carlo win probabilities for a single knockout match:
+    /// `(a_win_pct, b_win_pct, decided_after_90_pct)`.
+    pub fn match_win_probs(&self, ta: usize, tb: usize, n: usize, seed: u64) -> (f64, f64, f64) {
+        let (la, lb) = self.lam_pair(ta, tb);
+        let mut a_wins = 0usize;
+        let mut level_after_90 = 0usize;
+        let mut rng = SmallRng::seed_from_u64(seed);
+        for _ in 0..n {
+            let (_, _, wa, _) = self.ko_match(ta, tb, &mut rng, true);
+            if wa {
+                a_wins += 1;
+            }
+            // Independent draw of the regulation scoreline to estimate how
+            // often the match needs extra time (unbiased, same distribution).
+            let ga = Self::sample_poisson(&mut rng, la);
+            let gb = Self::sample_poisson(&mut rng, lb);
+            if ga == gb {
+                level_after_90 += 1;
+            }
+        }
+        let nf = n as f64;
+        (
+            a_wins as f64 / nf * 100.0,
+            (n - a_wins) as f64 / nf * 100.0,
+            (n - level_after_90) as f64 / nf * 100.0,
+        )
+    }
+
     pub fn simulate_one(&self, rng: &mut SmallRng) -> SingleSimResult {
         let _letters: Vec<String> = self.groups.iter().map(|(l, _)| l.clone()).collect();
         let mut slot_team: HashMap<String, usize> = HashMap::new();
@@ -534,8 +624,21 @@ impl World {
             .map(|(_, _, _, _, _, l)| l.clone())
             .collect();
 
-        let slots_elig = data::third_place_slots();
-        let assign = Self::assign_thirds(&qual, &slots_elig);
+        // Use FIFA's actual slot allocation when the qualified thirds are
+        // the real ones (always true with the full group stage recorded);
+        // fall back to backtracking for hypothetical scenarios.
+        let mut qual_sorted = qual.clone();
+        qual_sorted.sort();
+        let assign: HashMap<u32, String> =
+            if qual_sorted == ["B", "D", "E", "F", "I", "J", "K", "L"] {
+                data::actual_third_assignment()
+                    .into_iter()
+                    .map(|(m, g)| (m, g.to_string()))
+                    .collect()
+            } else {
+                let slots_elig = data::third_place_slots();
+                Self::assign_thirds(&qual, &slots_elig)
+            };
 
         let mut winners: HashMap<u32, usize> = HashMap::new();
         let mut losers: HashMap<u32, usize> = HashMap::new();
@@ -743,6 +846,14 @@ impl World {
     }
 }
 
+/// Real bracket state derived while walking recorded knockout results.
+#[derive(Default)]
+struct BracketProgress {
+    winners: HashMap<u32, usize>,
+    losers: HashMap<u32, usize>,
+    upcoming: Vec<(u32, &'static str, usize, usize)>,
+}
+
 pub struct SingleSimResult {
     pub champion: usize,
     pub finalists: (usize, usize),
@@ -944,6 +1055,57 @@ mod tests {
         assert_eq!(world.played.len(), 72);
         assert_eq!(world.played_knockout.len(), 28);
         assert!(world.knockout_out.contains(&germany));
+    }
+
+    #[test]
+    fn upcoming_matches_are_the_real_semifinals() {
+        let world = World::new();
+        let upcoming = world.upcoming_matches();
+        // With QFs recorded and SFs unplayed, exactly the two semifinals
+        // are pending: France vs Spain and England vs Argentina.
+        assert_eq!(upcoming.len(), 2);
+        let (m1, r1, a1, b1) = &upcoming[0];
+        let (m2, r2, a2, b2) = &upcoming[1];
+        assert_eq!((*m1, *r1), (101, "Semi-final"));
+        assert_eq!((*m2, *r2), (102, "Semi-final"));
+        let names = |a: usize, b: usize| (world.teams[a].clone(), world.teams[b].clone());
+        assert_eq!(names(*a1, *b1), ("France".to_string(), "Spain".to_string()));
+        assert_eq!(
+            names(*a2, *b2),
+            ("England".to_string(), "Argentina".to_string())
+        );
+    }
+
+    #[test]
+    fn upcoming_includes_final_and_bronze_once_semis_are_recorded() {
+        let mut world = World::new();
+        let (spain, france) = (world.idx["Spain"], world.idx["France"]);
+        let (england, argentina) = (world.idx["England"], world.idx["Argentina"]);
+        world
+            .played_knockout
+            .insert((spain.min(france), spain.max(france)), spain);
+        world
+            .played_knockout
+            .insert((england.min(argentina), england.max(argentina)), argentina);
+
+        let upcoming = world.upcoming_matches();
+        assert_eq!(upcoming.len(), 2);
+        assert_eq!(upcoming[0].0, crate::data::THIRD_PLACE_MATCH);
+        assert_eq!(upcoming[0].1, "Third-place match");
+        assert_eq!((upcoming[0].2, upcoming[0].3), (france, england));
+        assert_eq!(upcoming[1].0, crate::data::FINAL);
+        assert_eq!((upcoming[1].2, upcoming[1].3), (spain, argentina));
+    }
+
+    #[test]
+    fn match_win_probs_sum_to_100_and_favor_stronger_team() {
+        let world = World::new();
+        let spain = world.idx["Spain"];
+        let england = world.idx["England"];
+        let (a, b, decided_90) = world.match_win_probs(spain, england, 20_000, 42);
+        assert!((a + b - 100.0).abs() < 1e-9);
+        assert!(a > b, "higher-Elo Spain should be favored: {a} vs {b}");
+        assert!((0.0..=100.0).contains(&decided_90));
     }
 
     #[test]

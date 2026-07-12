@@ -4,8 +4,10 @@ import {
   runScenario,
   refreshLiveData,
   getLiveData,
+  getUpcoming,
   type SimResponse,
   type LiveData,
+  type UpcomingMatch,
 } from "./api";
 import { ResultsTable } from "./components/ResultsTable";
 import { GroupTables } from "./components/GroupTables";
@@ -23,6 +25,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [nSims, setNSims] = useState(50000);
   const [seed, setSeed] = useState(12345);
+  const [upcoming, setUpcoming] = useState<UpcomingMatch[]>([]);
   const [activeView, setActiveView] = useState<DashboardView>("forecast");
 
   const handleSimulate = useCallback(async () => {
@@ -69,6 +72,11 @@ export default function App() {
       })
       .catch(() => {
         /* cached live data is optional; manual refresh still available */
+      });
+    getUpcoming()
+      .then((u) => setUpcoming(u.matches))
+      .catch(() => {
+        /* upcoming forecasts are optional decoration */
       });
     void handleSimulate();
   }, [handleSimulate]);
@@ -240,6 +248,34 @@ export default function App() {
 
             <aside className="insight-rail">
               <ScenarioPrompt onSubmit={handleScenario} disabled={loading} />
+
+              {upcoming.length > 0 && (
+                <section className="rail-panel">
+                  <h3>Upcoming Matches</h3>
+                  <div className="upcoming-list">
+                    {upcoming.map((m) => (
+                      <div key={m.match_id} className="upcoming-match">
+                        <span className="upcoming-round">{m.round}</span>
+                        <div className="upcoming-teams">
+                          <span className={m.a_win_pct >= m.b_win_pct ? "favored" : ""}>
+                            {m.team_a} {m.a_win_pct.toFixed(1)}%
+                          </span>
+                          <span className="upcoming-vs">vs</span>
+                          <span className={m.b_win_pct > m.a_win_pct ? "favored" : ""}>
+                            {m.team_b} {m.b_win_pct.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="upcoming-bar">
+                          <div
+                            className="upcoming-bar-a"
+                            style={{ width: `${m.a_win_pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
 
               <section className="rail-panel">
                 <h3>Likely Finals</h3>

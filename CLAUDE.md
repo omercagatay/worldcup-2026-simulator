@@ -48,6 +48,7 @@ Routes (`src/handlers.rs`), each with its own per-IP rate limit (`src/rate_limit
 - `POST /api/simulate` (30/min) — takes optional `elo_overrides`, clones the current `World`, applies overrides **to the clone only** (does not mutate shared state), runs `World::simulate`.
 - `POST /api/scenario` (10/min) — sends the prompt to Kimi (`src/llm.rs`), validates the returned Elo adjustments against team names/bounds (`src/validation.rs`), applies them to a cloned `World`, simulates, returns results plus the LLM's `analysis` text.
 - `POST /api/refresh` (5/min) — scrapes Wikipedia (`src/scraper.rs`) for live Elo ratings, group results, and knockout results, then **does** mutate the shared `World` (`world.update_from_live`) and caches the raw scrape in `live_data`. This is the only path that changes state for subsequent requests.
+- `GET /api/upcoming` (30/min) — win probabilities for real bracket matches whose pairing is fixed but not yet played (semifinals → third-place match → final), computed per-match via `World::match_win_probs`.
 - `GET /api/live`, `GET /api/health` — read-only.
 
 Everything not matching `/api/*` falls back to `ServeDir::new("frontend/dist")`, so in production this is a single binary serving both API and SPA.

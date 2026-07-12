@@ -129,6 +129,45 @@ pub async fn get_live_data(
     Ok(Json(data))
 }
 
+/// Forecasts for real bracket matches whose pairing is fixed but which
+/// haven't been played yet (currently the semifinals; later the third-place
+/// match and final).
+pub async fn upcoming(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<crate::models::UpcomingResponse>, (StatusCode, String)> {
+    let world = state.world.read().await.clone();
+    let resp = tokio::task::spawn_blocking(move || {
+        let matches = world
+            .upcoming_matches()
+            .into_iter()
+            .map(|(match_id, round, ta, tb)| {
+                let (a_win_pct, b_win_pct, decided_in_90_pct) =
+                    world.match_win_probs(ta, tb, 100_000, 12345);
+                crate::models::UpcomingMatch {
+                    match_id,
+                    round: round.to_string(),
+                    team_a: world.teams[ta].clone(),
+                    team_b: world.teams[tb].clone(),
+                    a_win_pct,
+                    b_win_pct,
+                    decided_in_90_pct,
+                    a_win_odds: crate::odds::decimal_odds_from_pct(a_win_pct),
+                    b_win_odds: crate::odds::decimal_odds_from_pct(b_win_pct),
+                }
+            })
+            .collect();
+        crate::models::UpcomingResponse { matches }
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Upcoming forecast task failed: {e}"),
+        )
+    })?;
+    Ok(Json(resp))
+}
+
 pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let live_fetched_at = state
         .live_data

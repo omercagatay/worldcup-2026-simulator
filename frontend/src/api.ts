@@ -2,6 +2,7 @@ export interface TeamRow {
   team: string;
   win_pct: number;
   win_odds: number | null;
+  third_place_pct: number;
   final_pct: number;
   sf_pct: number;
   qf_pct: number;
@@ -132,6 +133,29 @@ export async function refreshLiveData(): Promise<LiveData> {
 /** Cached live data (kept fresh by the backend's background refresh). */
 export async function getLiveData(): Promise<LiveData | null> {
   const resp = await fetch(`${API_BASE}/api/live`);
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json();
+}
+
+export interface UpcomingMatch {
+  match_id: number;
+  round: string;
+  team_a: string;
+  team_b: string;
+  a_win_pct: number;
+  b_win_pct: number;
+  decided_in_90_pct: number;
+  a_win_odds: number | null;
+  b_win_odds: number | null;
+}
+
+export interface UpcomingResponse {
+  matches: UpcomingMatch[];
+}
+
+/** Forecasts for real bracket matches not yet played. */
+export async function getUpcoming(): Promise<UpcomingResponse> {
+  const resp = await fetch(`${API_BASE}/api/upcoming`);
   if (!resp.ok) throw new Error(await resp.text());
   return resp.json();
 }
