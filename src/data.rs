@@ -661,6 +661,45 @@ pub const FINAL: u32 = 104;
 #[allow(dead_code)]
 pub const THIRD_PLACE_MATCH: u32 = 103;
 
+/// Confirmed real knockout results `(team_a, team_b, winner)` — baseline so
+/// a fresh deploy stays correct even when the live scrape is unavailable.
+/// The live scrape overlays (and can extend) this list.
+pub fn played_knockout() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
+        // Round of 32
+        ("South Africa", "Canada", "Canada"),
+        ("Brazil", "Japan", "Brazil"),
+        ("Germany", "Paraguay", "Paraguay"),
+        ("Netherlands", "Morocco", "Morocco"),
+        ("Ivory Coast", "Norway", "Norway"),
+        ("France", "Sweden", "France"),
+        ("Mexico", "Ecuador", "Mexico"),
+        ("England", "DR Congo", "England"),
+        ("Belgium", "Senegal", "Belgium"),
+        ("United States", "Bosnia and Herzegovina", "United States"),
+        ("Spain", "Austria", "Spain"),
+        ("Portugal", "Croatia", "Portugal"),
+        ("Switzerland", "Algeria", "Switzerland"),
+        ("Australia", "Egypt", "Egypt"),
+        ("Argentina", "Cape Verde", "Argentina"),
+        ("Colombia", "Ghana", "Colombia"),
+        // Round of 16
+        ("Canada", "Morocco", "Morocco"),
+        ("Paraguay", "France", "France"),
+        ("Brazil", "Norway", "Norway"),
+        ("Mexico", "England", "England"),
+        ("Portugal", "Spain", "Spain"),
+        ("United States", "Belgium", "Belgium"),
+        ("Argentina", "Egypt", "Argentina"),
+        ("Switzerland", "Colombia", "Switzerland"),
+        // Quarter-finals
+        ("France", "Morocco", "France"),
+        ("Spain", "Belgium", "Spain"),
+        ("Norway", "England", "England"),
+        ("Argentina", "Switzerland", "Argentina"),
+    ]
+}
+
 #[derive(Debug, Clone)]
 pub struct PlayedMatch {
     pub group: &'static str,

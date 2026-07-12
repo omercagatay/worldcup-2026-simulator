@@ -96,6 +96,8 @@ impl World {
             .collect();
 
         let played = Self::static_played();
+        let played_knockout = Self::static_played_knockout(&idx);
+        let knockout_out = Self::derive_knockout_out(&played_knockout);
 
         World {
             teams,
@@ -104,9 +106,27 @@ impl World {
             host,
             groups,
             played,
-            played_knockout: HashMap::new(),
-            knockout_out: HashSet::new(),
+            played_knockout,
+            knockout_out,
         }
+    }
+
+    /// Baseline knockout results hardcoded in `data::played_knockout()`.
+    fn static_played_knockout(idx: &HashMap<String, usize>) -> HashMap<(usize, usize), usize> {
+        data::played_knockout()
+            .iter()
+            .map(|&(a, b, w)| {
+                let (ta, tb, tw) = (idx[a], idx[b], idx[w]);
+                ((ta.min(tb), ta.max(tb)), tw)
+            })
+            .collect()
+    }
+
+    fn derive_knockout_out(played_knockout: &HashMap<(usize, usize), usize>) -> HashSet<usize> {
+        played_knockout
+            .iter()
+            .map(|(&(a, b), &winner)| if winner == a { b } else { a })
+            .collect()
     }
 
     /// Baseline group results hardcoded in `data::played()`.
@@ -181,12 +201,9 @@ impl World {
             }
         }
 
-        // Only replace recorded knockout results when the scrape actually
-        // found some — a partial scrape (e.g. a transient Wikipedia layout
-        // change) must not erase previously applied real results.
-        if !live.knockout_matches.is_empty() {
-            self.played_knockout.clear();
-        }
+        // Scraped knockout results overlay the hardcoded baseline the same
+        // way, so a partial or failed scrape can't erase known real results.
+        self.played_knockout = Self::static_played_knockout(&self.idx);
         for km in &live.knockout_matches {
             let Some(&ta) = self.idx.get(&km.team_a) else {
                 tracing::warn!(
@@ -223,11 +240,7 @@ impl World {
         // A team that lost any recorded knockout match is out of the tournament
         // for good, independent of whatever hypothetical opponent a simulated
         // trial's bracket path might pit it against.
-        self.knockout_out = self
-            .played_knockout
-            .iter()
-            .map(|(&(a, b), &winner)| if winner == a { b } else { a })
-            .collect();
+        self.knockout_out = Self::derive_knockout_out(&self.played_knockout);
 
         let matches_updated = self.played.len() + self.played_knockout.len();
         tracing::info!(
@@ -777,48 +790,60 @@ mod tests {
 
     #[test]
     fn ko_winner_treats_prior_loser_as_eliminated_against_any_opponent() {
-        let mut world = World::new();
+        let world = World::new();
+        // Germany really lost to Paraguay (baseline knockout result), so it's
+        // out of the tournament — even if a simulated trial's bracket path
+        // pits it against a team it never actually played (Spain, still
+        // alive), it must still lose.
         let germany = world.idx["Germany"];
-        let paraguay = world.idx["Paraguay"];
-        let brazil = world.idx["Brazil"];
-        // Germany really lost to Paraguay, so it's out of the tournament —
-        // even if a simulated trial's bracket path pits it against a team
-        // (Brazil) it never actually played, it must still lose.
-        world
-            .played_knockout
-            .insert((germany.min(paraguay), germany.max(paraguay)), paraguay);
-        world.knockout_out.insert(germany);
+        let spain = world.idx["Spain"];
+        assert!(world.knockout_out.contains(&germany));
+        assert!(!world.knockout_out.contains(&spain));
 
         let mut rng = SmallRng::seed_from_u64(1);
         for seed in 0..20 {
             let mut rng2 = SmallRng::seed_from_u64(seed);
-            let (winner, loser) = world.ko_winner(germany, brazil, &mut rng2);
-            assert_eq!(winner, brazil);
+            let (winner, loser) = world.ko_winner(germany, spain, &mut rng2);
+            assert_eq!(winner, spain);
             assert_eq!(loser, germany);
         }
         // Order of arguments shouldn't matter either.
-        let (winner, loser) = world.ko_winner(brazil, germany, &mut rng);
-        assert_eq!(winner, brazil);
+        let (winner, loser) = world.ko_winner(spain, germany, &mut rng);
+        assert_eq!(winner, spain);
         assert_eq!(loser, germany);
+    }
+
+    #[test]
+    fn world_new_includes_baseline_knockout_results() {
+        let world = World::new();
+        assert_eq!(world.played_knockout.len(), 28);
+        assert_eq!(world.knockout_out.len(), 28);
+        // Semifinalists are still alive.
+        for alive in ["Spain", "France", "Argentina", "England"] {
+            assert!(!world.knockout_out.contains(&world.idx[alive]), "{alive}");
+        }
+        // Quarter-final losers are out.
+        for out in ["Morocco", "Belgium", "Norway", "Switzerland"] {
+            assert!(world.knockout_out.contains(&world.idx[out]), "{out}");
+        }
     }
 
     #[test]
     fn update_from_live_marks_knockout_losers_as_eliminated() {
         let mut world = World::new();
-        let germany_name = world.teams[world.idx["Germany"]].clone();
-        let paraguay_name = world.teams[world.idx["Paraguay"]].clone();
-
+        // A newly scraped result beyond the baseline (a semifinal) must mark
+        // the loser as eliminated while the winner stays alive.
         let live = crate::scraper::LiveData {
             elo_ratings: HashMap::new(),
             played_matches: Vec::new(),
             knockout_matches: vec![crate::scraper::ScrapedKnockoutMatch {
-                team_a: germany_name.clone(),
+                team_a: "Spain".to_string(),
                 score_a: 1,
-                team_b: paraguay_name.clone(),
+                team_b: "France".to_string(),
                 score_b: 1,
-                winner: paraguay_name.clone(),
-                penalty_score_a: Some(3),
-                penalty_score_b: Some(4),
+                winner: "Spain".to_string(),
+                penalty_score_a: Some(4),
+                penalty_score_b: Some(3),
             }],
             goalscorers: Vec::new(),
             group_standings: Vec::new(),
@@ -828,10 +853,9 @@ mod tests {
 
         world.update_from_live(&live);
 
-        let germany = world.idx["Germany"];
-        let paraguay = world.idx["Paraguay"];
-        assert!(world.knockout_out.contains(&germany));
-        assert!(!world.knockout_out.contains(&paraguay));
+        assert_eq!(world.played_knockout.len(), 29);
+        assert!(world.knockout_out.contains(&world.idx["France"]));
+        assert!(!world.knockout_out.contains(&world.idx["Spain"]));
     }
 
     #[test]
@@ -863,11 +887,11 @@ mod tests {
 
         let (_elo_updated, matches_updated) = world.update_from_live(&live);
         // Unrecognized rows are dropped: only the 72 baseline group results
-        // remain and no knockout result or elimination is recorded.
-        assert_eq!(matches_updated, 72);
+        // and 28 baseline knockout results remain.
+        assert_eq!(matches_updated, 100);
         assert_eq!(world.played.len(), 72);
-        assert!(world.played_knockout.is_empty());
-        assert!(world.knockout_out.is_empty());
+        assert_eq!(world.played_knockout.len(), 28);
+        assert_eq!(world.knockout_out.len(), 28);
     }
 
     #[test]
@@ -915,10 +939,10 @@ mod tests {
         };
         world.update_from_live(&live);
 
-        // Hardcoded group results and previously recorded knockout results
-        // survive a scrape that found nothing.
+        // Hardcoded group and knockout baselines survive a scrape that
+        // found nothing.
         assert_eq!(world.played.len(), 72);
-        assert_eq!(world.played_knockout.len(), 1);
+        assert_eq!(world.played_knockout.len(), 28);
         assert!(world.knockout_out.contains(&germany));
     }
 
