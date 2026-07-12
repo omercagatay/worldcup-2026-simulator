@@ -114,9 +114,8 @@ pub fn match_probs(lambda_h: f64, lambda_a: f64, rho: f64) -> (f64, f64, f64) {
     let mut w = 0.0;
     let mut d = 0.0;
     let mut l = 0.0;
-    for x in 0..=MAX_GOALS {
-        for y in 0..=MAX_GOALS {
-            let p = t[x][y];
+    for (x, row) in t.iter().enumerate() {
+        for (y, &p) in row.iter().enumerate() {
             if x > y {
                 w += p;
             } else if x == y {
@@ -134,9 +133,9 @@ fn poisson_pmf(lambda: f64) -> [f64; MAX_GOALS + 1] {
     let mut out = [0.0_f64; MAX_GOALS + 1];
     let mut term = (-l).exp();
     out[0] = term;
-    for k in 1..=MAX_GOALS {
+    for (k, slot) in out.iter_mut().enumerate().skip(1) {
         term *= l / k as f64;
-        out[k] = term;
+        *slot = term;
     }
     out
 }
@@ -257,12 +256,8 @@ impl Gradient for DcProblem {
             }
             // Same-shape penalty (penalty matches regularizer used in cost).
             // Soft regularization derivative for alpha/beta entries (indices >= 3).
-            if i >= 3 && i < 3 + (self.n_teams - 1) {
-                let ai = x[i];
-                g[i] += 2e-4 * ai;
-            } else if i >= 3 + (self.n_teams - 1) {
-                let bi = x[i];
-                g[i] += 2e-4 * bi;
+            if i >= 3 {
+                g[i] += 2e-4 * x[i];
             }
         }
         let _ = f0;
@@ -360,7 +355,7 @@ pub fn fit_and_save(
     max_iters: u64,
 ) -> std::io::Result<DcParams> {
     let params = fit(fits, idx, half_life_days, max_iters)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("argmin: {e}")))?;
+        .map_err(|e| std::io::Error::other(format!("argmin: {e}")))?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }

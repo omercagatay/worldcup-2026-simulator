@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -16,6 +16,11 @@ pub struct World {
     pub groups: Vec<(String, Vec<usize>)>,
     pub played: HashMap<(String, usize, usize), (u16, u16)>,
     pub played_knockout: HashMap<(usize, usize), usize>,
+    /// Teams that have lost a confirmed real-world knockout match, derived from
+    /// `played_knockout`. Consulted by `ko_winner` so an already-eliminated team
+    /// can't be simulated as winning a hypothetical match the real bracket never
+    /// produced (e.g. because an earlier round's pairing was mis-scraped).
+    pub knockout_out: HashSet<usize>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -59,6 +64,12 @@ impl Default for SimConfig {
             seed: 12345,
             elo_overrides: HashMap::new(),
         }
+    }
+}
+
+impl Default for World {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -109,6 +120,7 @@ impl World {
             groups,
             played,
             played_knockout: HashMap::new(),
+            knockout_out: HashSet::new(),
         }
     }
 
@@ -123,52 +135,91 @@ impl World {
 
         self.played.clear();
         self.played_knockout.clear();
-        for (letter, members) in &self.groups {
-            let member_names: Vec<&str> = members.iter().map(|&i| self.teams[i].as_str()).collect();
-            for pm in &live.played_matches {
-                if pm.group != *letter {
-                    continue;
-                }
-                let pa = match member_names.iter().position(|&t| t == pm.team_a) {
-                    Some(p) => p,
-                    None => continue,
-                };
-                let pb = match member_names.iter().position(|&t| t == pm.team_b) {
-                    Some(p) => p,
-                    None => continue,
-                };
-                if pa < pb {
-                    self.played
-                        .insert((letter.clone(), pa, pb), (pm.score_a, pm.score_b));
-                } else {
-                    self.played
-                        .insert((letter.clone(), pb, pa), (pm.score_b, pm.score_a));
-                }
+
+        for pm in &live.played_matches {
+            let Some(group_entry) = self.groups.iter().find(|g| g.0 == pm.group) else {
+                tracing::warn!(
+                    "Live played match references unknown group {:?}: {} vs {} — dropped, will be simulated instead of applied",
+                    pm.group, pm.team_a, pm.team_b
+                );
+                continue;
+            };
+            let member_names: Vec<&str> = group_entry
+                .1
+                .iter()
+                .map(|&i| self.teams[i].as_str())
+                .collect();
+            let Some(pa) = member_names.iter().position(|&t| t == pm.team_a) else {
+                tracing::warn!(
+                    "Live played match team name {:?} did not match any team in group {} — dropped, will be simulated instead of applied",
+                    pm.team_a, pm.group
+                );
+                continue;
+            };
+            let Some(pb) = member_names.iter().position(|&t| t == pm.team_b) else {
+                tracing::warn!(
+                    "Live played match team name {:?} did not match any team in group {} — dropped, will be simulated instead of applied",
+                    pm.team_b, pm.group
+                );
+                continue;
+            };
+            if pa < pb {
+                self.played
+                    .insert((pm.group.clone(), pa, pb), (pm.score_a, pm.score_b));
+            } else {
+                self.played
+                    .insert((pm.group.clone(), pb, pa), (pm.score_b, pm.score_a));
             }
         }
 
         for km in &live.knockout_matches {
             let Some(&ta) = self.idx.get(&km.team_a) else {
+                tracing::warn!(
+                    "Live knockout match team name not recognized: {:?} (vs {:?}) — dropped, will be simulated instead of applied",
+                    km.team_a, km.team_b
+                );
                 continue;
             };
             let Some(&tb) = self.idx.get(&km.team_b) else {
+                tracing::warn!(
+                    "Live knockout match team name not recognized: {:?} (vs {:?}) — dropped, will be simulated instead of applied",
+                    km.team_b, km.team_a
+                );
                 continue;
             };
             let Some(&winner) = self.idx.get(&km.winner) else {
+                tracing::warn!(
+                    "Live knockout match winner name not recognized: {:?} ({} vs {}) — dropped, will be simulated instead of applied",
+                    km.winner, km.team_a, km.team_b
+                );
                 continue;
             };
             if winner != ta && winner != tb {
+                tracing::warn!(
+                    "Live knockout match winner {:?} matches neither {} nor {} — dropped, will be simulated instead of applied",
+                    km.winner, km.team_a, km.team_b
+                );
                 continue;
             }
             self.played_knockout
                 .insert((ta.min(tb), ta.max(tb)), winner);
         }
 
+        // A team that lost any recorded knockout match is out of the tournament
+        // for good, independent of whatever hypothetical opponent a simulated
+        // trial's bracket path might pit it against.
+        self.knockout_out = self
+            .played_knockout
+            .iter()
+            .map(|(&(a, b), &winner)| if winner == a { b } else { a })
+            .collect();
+
         let matches_updated = self.played.len() + self.played_knockout.len();
         tracing::info!(
-            "World updated from live data: {} Elo ratings, {} played matches applied",
+            "World updated from live data: {} Elo ratings, {} played matches applied, {} teams confirmed eliminated",
             elo_updated,
-            matches_updated
+            matches_updated,
+            self.knockout_out.len()
         );
         (elo_updated, matches_updated)
     }
@@ -390,6 +441,18 @@ impl World {
         if let Some(&winner) = self.played_knockout.get(&key) {
             let loser = if winner == ta { tb } else { ta };
             return (winner, loser);
+        }
+
+        // Neither team played this exact hypothetical matchup for real, but if
+        // one of them is already confirmed out of the tournament by an earlier
+        // recorded result, it can't win here no matter who it's paired against.
+        let ta_out = self.knockout_out.contains(&ta);
+        let tb_out = self.knockout_out.contains(&tb);
+        if ta_out && !tb_out {
+            return (tb, ta);
+        }
+        if tb_out && !ta_out {
+            return (ta, tb);
         }
 
         let (_, _, wa, _) = self.ko_match(ta, tb, rng, true);
@@ -693,6 +756,97 @@ mod tests {
 
         assert_eq!(winner, paraguay);
         assert_eq!(loser, germany);
+    }
+
+    #[test]
+    fn ko_winner_treats_prior_loser_as_eliminated_against_any_opponent() {
+        let mut world = World::new();
+        let germany = world.idx["Germany"];
+        let paraguay = world.idx["Paraguay"];
+        let brazil = world.idx["Brazil"];
+        // Germany really lost to Paraguay, so it's out of the tournament —
+        // even if a simulated trial's bracket path pits it against a team
+        // (Brazil) it never actually played, it must still lose.
+        world
+            .played_knockout
+            .insert((germany.min(paraguay), germany.max(paraguay)), paraguay);
+        world.knockout_out.insert(germany);
+
+        let mut rng = SmallRng::seed_from_u64(1);
+        for seed in 0..20 {
+            let mut rng2 = SmallRng::seed_from_u64(seed);
+            let (winner, loser) = world.ko_winner(germany, brazil, &mut rng2);
+            assert_eq!(winner, brazil);
+            assert_eq!(loser, germany);
+        }
+        // Order of arguments shouldn't matter either.
+        let (winner, loser) = world.ko_winner(brazil, germany, &mut rng);
+        assert_eq!(winner, brazil);
+        assert_eq!(loser, germany);
+    }
+
+    #[test]
+    fn update_from_live_marks_knockout_losers_as_eliminated() {
+        let mut world = World::new();
+        let germany_name = world.teams[world.idx["Germany"]].clone();
+        let paraguay_name = world.teams[world.idx["Paraguay"]].clone();
+
+        let live = crate::scraper::LiveData {
+            elo_ratings: HashMap::new(),
+            played_matches: Vec::new(),
+            knockout_matches: vec![crate::scraper::ScrapedKnockoutMatch {
+                team_a: germany_name.clone(),
+                score_a: 1,
+                team_b: paraguay_name.clone(),
+                score_b: 1,
+                winner: paraguay_name.clone(),
+                penalty_score_a: Some(3),
+                penalty_score_b: Some(4),
+            }],
+            goalscorers: Vec::new(),
+            group_standings: Vec::new(),
+            tournament_stats: None,
+            fetched_at: "unix:0".to_string(),
+        };
+
+        world.update_from_live(&live);
+
+        let germany = world.idx["Germany"];
+        let paraguay = world.idx["Paraguay"];
+        assert!(world.knockout_out.contains(&germany));
+        assert!(!world.knockout_out.contains(&paraguay));
+    }
+
+    #[test]
+    fn update_from_live_drops_unrecognized_names_without_panicking() {
+        let mut world = World::new();
+        let live = crate::scraper::LiveData {
+            elo_ratings: HashMap::new(),
+            played_matches: vec![crate::scraper::ScrapedMatch {
+                group: "A".to_string(),
+                team_a: "Mexico".to_string(),
+                score_a: 1,
+                team_b: "Atlantis".to_string(),
+                score_b: 0,
+            }],
+            knockout_matches: vec![crate::scraper::ScrapedKnockoutMatch {
+                team_a: "Atlantis".to_string(),
+                score_a: 2,
+                team_b: "Brazil".to_string(),
+                score_b: 0,
+                winner: "Atlantis".to_string(),
+                penalty_score_a: None,
+                penalty_score_b: None,
+            }],
+            goalscorers: Vec::new(),
+            group_standings: Vec::new(),
+            tournament_stats: None,
+            fetched_at: "unix:0".to_string(),
+        };
+
+        let (_elo_updated, matches_updated) = world.update_from_live(&live);
+        assert_eq!(matches_updated, 0);
+        assert!(world.knockout_out.is_empty());
     }
 
     #[test]
