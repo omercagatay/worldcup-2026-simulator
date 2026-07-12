@@ -21,6 +21,75 @@ pub struct World {
     /// can't be simulated as winning a hypothetical match the real bracket never
     /// produced (e.g. because an earlier round's pairing was mis-scraped).
     pub knockout_out: HashSet<usize>,
+    /// Optional strength-model ensemble blended into expected goals; `None`
+    /// means pure Elo (the historical behavior, used by most unit tests).
+    pub ensemble: Option<Ensemble>,
+}
+
+/// Weighted blend of the three strength models. Dixon-Coles and pi-rating
+/// team indices coincide with `World` team indices because
+/// `history::TeamIndex::wc()` is built from the same `data::elo()` order.
+#[derive(Clone)]
+pub struct Ensemble {
+    pub dc: crate::dixoncoles::DcParams,
+    pub pi: crate::piratings::PiRatings,
+    /// Blend weights (Elo, Dixon-Coles, pi-ratings); normalized on use.
+    pub w_elo: f64,
+    pub w_dc: f64,
+    pub w_pi: f64,
+}
+
+impl Ensemble {
+    /// Build the ensemble from data embedded in the binary: the offline
+    /// Dixon-Coles fit (`data/dc_params.json`, refreshed via
+    /// `cargo run --example fit_dc`) and pi-ratings computed in one pass
+    /// over the historical results.
+    pub fn from_embedded_data(w_elo: f64, w_dc: f64, w_pi: f64) -> Result<Self, String> {
+        let dc: crate::dixoncoles::DcParams =
+            serde_json::from_str(include_str!("../data/dc_params.json"))
+                .map_err(|e| format!("dc_params.json: {e}"))?;
+        let idx = crate::history::TeamIndex::wc();
+        if dc.n_teams != idx.idx_to_name.len() || dc.alpha.len() != dc.n_teams {
+            return Err(format!(
+                "dc_params.json team count {} does not match current team list {} — refit with `cargo run --example fit_dc`",
+                dc.n_teams,
+                idx.idx_to_name.len()
+            ));
+        }
+        let history = crate::history::load_history_with_cutoff(2010);
+        let since = chrono::NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid date");
+        let pi = crate::piratings::PiRatings::compute(&history, &idx, since);
+        Ok(Ensemble {
+            dc,
+            pi,
+            w_elo,
+            w_dc,
+            w_pi,
+        })
+    }
+
+    /// Blended `(λ_a, λ_b)` for a match, or `None` when the ensemble
+    /// weights leave only the Elo component.
+    fn lam_pair(&self, ia: usize, ib: usize, host_a: bool, host_b: bool) -> Option<(f64, f64)> {
+        let total = self.w_dc + self.w_pi;
+        if total <= 0.0 {
+            return None;
+        }
+        // Dixon-Coles: gamma is a home-ground boost; a host plays "at home".
+        let (dc_a, dc_b) = if host_a {
+            self.dc.lam(ia, ib, false)
+        } else if host_b {
+            let (lb, la) = self.dc.lam(ib, ia, false);
+            (la, lb)
+        } else {
+            self.dc.lam(ia, ib, true)
+        };
+        let (pi_a, pi_b) = self.pi.lambdas(ia, ib, host_a, host_b);
+        Some((
+            (self.w_dc * dc_a + self.w_pi * pi_a) / total,
+            (self.w_dc * dc_b + self.w_pi * pi_b) / total,
+        ))
+    }
 }
 
 #[derive(Clone, Default, Debug)]
@@ -107,6 +176,7 @@ impl World {
             played,
             played_knockout,
             knockout_out,
+            ensemble: None,
         }
     }
 
@@ -262,8 +332,24 @@ impl World {
     fn lam_pair(&self, ia: usize, ib: usize) -> (f64, f64) {
         let dr = self.elo[ia] - self.elo[ib]
             + data::HOME_ADV * (self.host[ia] as i8 - self.host[ib] as i8) as f64;
-        let la = data::BASE * (10.0_f64).powf(dr / data::D_DIV);
-        let lb = data::BASE * (10.0_f64).powf(-dr / data::D_DIV);
+        let la_elo = data::BASE * (10.0_f64).powf(dr / data::D_DIV);
+        let lb_elo = data::BASE * (10.0_f64).powf(-dr / data::D_DIV);
+
+        let ensemble_lam = self.ensemble.as_ref().and_then(|e| {
+            e.lam_pair(ia, ib, self.host[ia], self.host[ib])
+                .map(|l| (e, l))
+        });
+        let (la, lb) = match ensemble_lam {
+            None => (la_elo, lb_elo),
+            Some((e, (ea, eb))) => {
+                let w_models = e.w_dc + e.w_pi;
+                let total = e.w_elo + w_models;
+                (
+                    (e.w_elo * la_elo + w_models * ea) / total,
+                    (e.w_elo * lb_elo + w_models * eb) / total,
+                )
+            }
+        };
         (la.clamp(0.15, 5.0), lb.clamp(0.15, 5.0))
     }
 
@@ -435,10 +521,11 @@ impl World {
         rng: &mut SmallRng,
         knockout: bool,
     ) -> (i64, i64, bool, bool) {
+        // Elo difference still drives the penalty-shootout model below; the
+        // goal rates come from the (possibly ensemble-blended) lam_pair.
         let dr = self.elo[ia] - self.elo[ib]
             + data::HOME_ADV * (self.host[ia] as i8 - self.host[ib] as i8) as f64;
-        let la = (data::BASE * (10.0_f64).powf(dr / data::D_DIV)).clamp(0.15, 5.0);
-        let lb = (data::BASE * (10.0_f64).powf(-dr / data::D_DIV)).clamp(0.15, 5.0);
+        let (la, lb) = self.lam_pair(ia, ib);
         let ga = Self::sample_poisson(rng, la);
         let gb = Self::sample_poisson(rng, lb);
         if !knockout {
@@ -1106,6 +1193,59 @@ mod tests {
         assert!((a + b - 100.0).abs() < 1e-9);
         assert!(a > b, "higher-Elo Spain should be favored: {a} vs {b}");
         assert!((0.0..=100.0).contains(&decided_90));
+    }
+
+    #[test]
+    fn ensemble_builds_from_embedded_data_and_blends_lambdas() {
+        let mut world = World::new();
+        let arg = world.idx["Argentina"];
+        let nzl = world.idx["New Zealand"];
+        let (elo_a, elo_n) = world.lam_pair(arg, nzl);
+
+        let ens = Ensemble::from_embedded_data(0.5, 0.3, 0.2).expect("embedded ensemble");
+        assert_eq!(ens.dc.n_teams, world.teams.len() + 1); // + Rest of World bucket
+        world.ensemble = Some(ens);
+
+        let (mix_a, mix_n) = world.lam_pair(arg, nzl);
+        // Strong side still favored, lambdas clamped and changed by the blend.
+        assert!(mix_a > mix_n);
+        assert!((0.15..=5.0).contains(&mix_a) && (0.15..=5.0).contains(&mix_n));
+        assert!(
+            (mix_a - elo_a).abs() > 1e-9 || (mix_n - elo_n).abs() > 1e-9,
+            "blend should differ from pure Elo"
+        );
+    }
+
+    #[test]
+    fn elo_only_weights_reproduce_pure_elo_lambdas() {
+        let mut world = World::new();
+        let arg = world.idx["Argentina"];
+        let fra = world.idx["France"];
+        let pure = world.lam_pair(arg, fra);
+        world.ensemble = Some(Ensemble::from_embedded_data(1.0, 0.0, 0.0).expect("ensemble"));
+        let weighted = world.lam_pair(arg, fra);
+        assert!((pure.0 - weighted.0).abs() < 1e-12);
+        assert!((pure.1 - weighted.1).abs() < 1e-12);
+    }
+
+    #[test]
+    fn simulate_with_ensemble_is_deterministic() {
+        let mut world = World::new();
+        world.ensemble = Some(Ensemble::from_embedded_data(0.5, 0.3, 0.2).expect("ensemble"));
+        let config = SimConfig {
+            n_sims: 500,
+            seed: 42,
+            elo_overrides: HashMap::new(),
+        };
+        let r1 = world.simulate(&config);
+        let r2 = world.simulate(&config);
+        assert_eq!(r1.champ_counts, r2.champ_counts);
+        // Only the four real semifinalists can still win.
+        let alive: HashSet<usize> = ["Spain", "France", "Argentina", "England"]
+            .iter()
+            .map(|t| world.idx[*t])
+            .collect();
+        assert!(r1.champ_counts.keys().all(|t| alive.contains(t)));
     }
 
     #[test]

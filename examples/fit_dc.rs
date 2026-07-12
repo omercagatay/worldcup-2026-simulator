@@ -72,4 +72,8 @@ fn main() {
     let (lh, la) = params.lam(arg, fra, true);
     let (w, d, l) = dixoncoles::match_probs(lh, la, params.rho);
     println!("\nArgentina vs France (neutral): λ_A={:.2} λ_F={:.2}  P(A win)={:.3}  P(draw)={:.3}  P(F win)={:.3}", lh, la, w, d, l);
+
+    let out = std::path::Path::new("data/dc_params.json");
+    params.save_json(out).expect("save dc_params.json");
+    println!("Saved fitted parameters to {}", out.display());
 }

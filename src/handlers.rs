@@ -175,9 +175,22 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
         .await
         .as_ref()
         .map(|l| l.fetched_at.clone());
+    let model = {
+        let world = state.world.read().await;
+        match &world.ensemble {
+            Some(e) => serde_json::json!({
+                "kind": "ensemble",
+                "weights": { "elo": e.w_elo, "dixon_coles": e.w_dc, "pi_ratings": e.w_pi },
+                "dc_fitted_at": e.dc.fitted_at,
+                "pi_matches": e.pi.n_matches,
+            }),
+            None => serde_json::json!({ "kind": "elo" }),
+        }
+    };
     Json(serde_json::json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
         "live_fetched_at": live_fetched_at,
+        "model": model,
     }))
 }

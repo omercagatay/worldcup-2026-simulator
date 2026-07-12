@@ -70,9 +70,14 @@ Across all trials, `simulate` aggregates counts (champion, finalist, SF/QF/R16/R
 
 Static tournament structure: team list + Elo, group assignments, host nations (home advantage), already-played first-round results (fixed, not simulated), and the knockout bracket graph. Changing team Elo, groups, or results for a new tournament stage means editing this file (or applying `elo_overrides` / scraping live data at request time).
 
-### Offline model-fitting (`src/dixoncoles.rs`, `src/history.rs`) — not wired into the server
+### Strength-model ensemble (`src/dixoncoles.rs`, `src/piratings.rs`, `src/history.rs`)
 
-These implement a Dixon-Coles attack/defense model fit against `data/international_results.csv` (refreshed via `scripts/refresh_history.sh`), invoked only from `examples/fit_dc.rs`. The live simulation in `src/sim.rs` uses static Elo ratings, not this model's output — there's no runtime connection between the two yet. `src/odds.rs` and `src/piratings.rs` are empty stub modules already wired into `src/lib.rs` but with no implementation.
+The simulation blends three strength models into each match's expected goals (λ), weighted by `ENSEMBLE_WEIGHTS` env var (`"elo,dc,pi"`, default `0.5,0.3,0.2`; `1,0,0` = pure Elo):
+- **Elo-Poisson** (original model): λ from Elo difference via `BASE`/`D_DIV`/`HOME_ADV`.
+- **Dixon-Coles** attack/defense params, fit offline against `data/international_results.csv` (refreshed via `scripts/refresh_history.sh`) with `cargo run --release --example fit_dc`, which writes `data/dc_params.json`; the server loads that file via `include_str!` at startup (~2s refit when the team list or history changes). The runtime uses DC λs only, not the ρ low-score correction.
+- **Pi-ratings** (Constantinou–Fenton), computed in one fast pass over the same history at startup (`src/piratings.rs`).
+
+`World.ensemble: Option<Ensemble>` holds the blend; `None` (as in `World::new()` and most tests) means pure Elo. Team indices in DC/pi coincide with `World` indices because `history::TeamIndex::wc()` is built from the same `data::elo()` order (plus a trailing "Rest of World" bucket). Elo overrides from scenarios act through the Elo component only. `GET /api/health` reports the active model and weights. The penalty-shootout model stays Elo-based.
 
 ### LLM scenario analysis (`src/llm.rs`)
 

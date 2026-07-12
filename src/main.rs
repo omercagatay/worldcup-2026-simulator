@@ -22,7 +22,39 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::from_default_env().add_directive("wc2026_sim=info".parse()?))
         .init();
 
-    let world = World::new();
+    let mut world = World::new();
+
+    // Strength-model ensemble: "elo,dc,pi" weights, e.g. "0.5,0.3,0.2".
+    // "1,0,0" (or a failed build) falls back to pure Elo.
+    let weights_raw =
+        std::env::var("ENSEMBLE_WEIGHTS").unwrap_or_else(|_| "0.5,0.3,0.2".to_string());
+    let weights: Vec<f64> = weights_raw
+        .split(',')
+        .filter_map(|w| w.trim().parse().ok())
+        .collect();
+    let (w_elo, w_dc, w_pi) = match weights.as_slice() {
+        [e, d, p] if *e >= 0.0 && *d >= 0.0 && *p >= 0.0 && e + d + p > 0.0 => (*e, *d, *p),
+        _ => {
+            tracing::warn!("Invalid ENSEMBLE_WEIGHTS {weights_raw:?}, using 0.5,0.3,0.2");
+            (0.5, 0.3, 0.2)
+        }
+    };
+    if w_dc + w_pi > 0.0 {
+        match wc2026_sim::sim::Ensemble::from_embedded_data(w_elo, w_dc, w_pi) {
+            Ok(ens) => {
+                tracing::info!(
+                    "Model ensemble active: elo={w_elo} dc={w_dc} (fitted {}) pi={w_pi} ({} matches)",
+                    ens.dc.fitted_at,
+                    ens.pi.n_matches
+                );
+                world.ensemble = Some(ens);
+            }
+            Err(e) => tracing::warn!("Ensemble unavailable, using pure Elo: {e}"),
+        }
+    } else {
+        tracing::info!("Ensemble weights disable DC/pi components; using pure Elo");
+    }
+
     let kimi_api_key = std::env::var("KIMI_API_KEY").ok();
     if kimi_api_key.is_some() {
         tracing::info!("Kimi scenario analysis enabled");
