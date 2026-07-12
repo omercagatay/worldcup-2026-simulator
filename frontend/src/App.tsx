@@ -197,7 +197,7 @@ export default function App() {
                   <strong>Elo adjustments:</strong>
                   {Object.entries(data.elo_overrides).map(([team, elo]) => (
                     <span key={team} className="elo-delta">
-                      {team}: {elo}
+                      {team}: {elo.toFixed(0)}
                     </span>
                   ))}
                 </div>

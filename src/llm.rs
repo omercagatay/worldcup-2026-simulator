@@ -67,7 +67,10 @@ pub struct ScenarioImpact {
 }
 
 pub async fn analyze_scenario(prompt: &str, api_key: &str) -> Result<ScenarioImpact> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .context("Failed to build HTTP client")?;
     let req = ChatRequest {
         model: KIMI_MODEL.to_string(),
         messages: vec![

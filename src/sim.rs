@@ -95,6 +95,22 @@ impl World {
             })
             .collect();
 
+        let played = Self::static_played();
+
+        World {
+            teams,
+            idx,
+            elo,
+            host,
+            groups,
+            played,
+            played_knockout: HashMap::new(),
+            knockout_out: HashSet::new(),
+        }
+    }
+
+    /// Baseline group results hardcoded in `data::played()`.
+    fn static_played() -> HashMap<(String, usize, usize), (u16, u16)> {
         let mut played: HashMap<(String, usize, usize), (u16, u16)> = HashMap::new();
         for pm in data::played() {
             let members: Vec<&str> = data::groups()
@@ -111,17 +127,7 @@ impl World {
                 played.insert((pm.group.to_string(), pb, pa), (pm.sb, pm.sa));
             }
         }
-
-        World {
-            teams,
-            idx,
-            elo,
-            host,
-            groups,
-            played,
-            played_knockout: HashMap::new(),
-            knockout_out: HashSet::new(),
-        }
+        played
     }
 
     pub fn update_from_live(&mut self, live: &crate::scraper::LiveData) -> (usize, usize) {
@@ -133,8 +139,11 @@ impl World {
             }
         }
 
-        self.played.clear();
-        self.played_knockout.clear();
+        // Scraped group results overlay the hardcoded baseline rather than
+        // replacing it: the Wikipedia main article stopped exposing group
+        // footballboxes once the knockout rounds started, so a scrape that
+        // parses zero group matches must not wipe the known final results.
+        self.played = Self::static_played();
 
         for pm in &live.played_matches {
             let Some(group_entry) = self.groups.iter().find(|g| g.0 == pm.group) else {
@@ -172,6 +181,12 @@ impl World {
             }
         }
 
+        // Only replace recorded knockout results when the scrape actually
+        // found some — a partial scrape (e.g. a transient Wikipedia layout
+        // change) must not erase previously applied real results.
+        if !live.knockout_matches.is_empty() {
+            self.played_knockout.clear();
+        }
         for km in &live.knockout_matches {
             let Some(&ta) = self.idx.get(&km.team_a) else {
                 tracing::warn!(
@@ -476,17 +491,19 @@ impl World {
             thirds.push((letter.clone(), third_rec));
         }
 
-        let lots_rand: f64 = rng.gen();
+        // FIFA's final cross-group tiebreaker is a drawing of lots: give each
+        // group an independent random value per trial. (A single shared value
+        // would cancel out in comparisons and deterministically favor
+        // later-lettered groups.)
         let mut thirds_scored: Vec<(i64, i64, i64, i64, f64, String)> = thirds
             .iter()
-            .enumerate()
-            .map(|(i, (letter, rec))| {
+            .map(|(letter, rec)| {
                 (
                     rec.0,
                     rec.1,
                     rec.2,
                     -rec.3,
-                    lots_rand * 0.001 + i as f64 * 1e-6,
+                    rng.gen::<f64>(),
                     letter.clone(),
                 )
             })
@@ -845,8 +862,64 @@ mod tests {
         };
 
         let (_elo_updated, matches_updated) = world.update_from_live(&live);
-        assert_eq!(matches_updated, 0);
+        // Unrecognized rows are dropped: only the 72 baseline group results
+        // remain and no knockout result or elimination is recorded.
+        assert_eq!(matches_updated, 72);
+        assert_eq!(world.played.len(), 72);
+        assert!(world.played_knockout.is_empty());
         assert!(world.knockout_out.is_empty());
+    }
+
+    #[test]
+    fn group_stage_is_fully_determined_by_recorded_results() {
+        let world = World::new();
+        // All 72 group matches are recorded, so group outcomes must be
+        // identical across trials regardless of the RNG.
+        assert_eq!(world.played.len(), 72);
+        let mut rng1 = SmallRng::seed_from_u64(1);
+        let mut rng2 = SmallRng::seed_from_u64(999);
+        let r1 = world.simulate_one(&mut rng1);
+        let r2 = world.simulate_one(&mut rng2);
+        assert_eq!(r1.group_order, r2.group_order);
+        assert_eq!(r1.qual_thirds, r2.qual_thirds);
+
+        // Spot-check the real standings, including the tight tiebreaks.
+        assert_eq!(r1.group_order["1A"], world.idx["Mexico"]);
+        assert_eq!(r1.group_order["2B"], world.idx["Canada"]);
+        assert_eq!(r1.group_order["2D"], world.idx["Australia"]);
+        assert_eq!(r1.group_order["2H"], world.idx["Cape Verde"]);
+        assert_eq!(r1.group_order["1K"], world.idx["Colombia"]);
+        // Qualified third-placed teams (Senegal edges Iran on goal difference).
+        let mut quals = r1.qual_thirds.clone();
+        quals.sort();
+        assert_eq!(quals, vec!["B", "D", "E", "F", "I", "J", "K", "L"]);
+    }
+
+    #[test]
+    fn update_from_live_with_empty_scrape_keeps_baseline_and_knockouts() {
+        let mut world = World::new();
+        let germany = world.idx["Germany"];
+        let paraguay = world.idx["Paraguay"];
+        world
+            .played_knockout
+            .insert((germany.min(paraguay), germany.max(paraguay)), paraguay);
+
+        let live = crate::scraper::LiveData {
+            elo_ratings: HashMap::new(),
+            played_matches: Vec::new(),
+            knockout_matches: Vec::new(),
+            goalscorers: Vec::new(),
+            group_standings: Vec::new(),
+            tournament_stats: None,
+            fetched_at: "unix:0".to_string(),
+        };
+        world.update_from_live(&live);
+
+        // Hardcoded group results and previously recorded knockout results
+        // survive a scrape that found nothing.
+        assert_eq!(world.played.len(), 72);
+        assert_eq!(world.played_knockout.len(), 1);
+        assert!(world.knockout_out.contains(&germany));
     }
 
     #[test]

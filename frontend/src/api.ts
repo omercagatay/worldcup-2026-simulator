@@ -103,6 +103,17 @@ export interface LiveData {
     goals: number;
     active?: boolean;
   }[];
+  group_standings: {
+    group: string;
+    team: string;
+    played: number;
+    wins: number;
+    draws: number;
+    losses: number;
+    goals_for: number;
+    goals_against: number;
+    points: number;
+  }[];
   tournament_stats: {
     matches_played: number;
     goals_scored: number;

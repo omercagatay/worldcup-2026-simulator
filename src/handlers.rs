@@ -36,9 +36,28 @@ pub async fn run_sim(
             w
         }
     };
-    let results = world.simulate(&config);
-    let resp = build_response(&world, &results, &config, None);
+    let resp = simulate_off_runtime(world, config, None).await?;
     Ok(Json(resp))
+}
+
+/// Run the CPU-bound rayon simulation on the blocking pool so it can't
+/// stall tokio's worker threads (and with them /api/health).
+async fn simulate_off_runtime(
+    world: crate::sim::World,
+    config: SimConfig,
+    scenario: Option<String>,
+) -> Result<SimResponse, (StatusCode, String)> {
+    tokio::task::spawn_blocking(move || {
+        let results = world.simulate(&config);
+        build_response(&world, &results, &config, scenario)
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Simulation task failed: {e}"),
+        )
+    })
 }
 
 pub async fn scenario(
@@ -69,8 +88,7 @@ pub async fn scenario(
         seed: req.seed.unwrap_or(12345),
         elo_overrides: impact.adjustments.clone(),
     };
-    let results = world.simulate(&config);
-    let resp = build_response(&world, &results, &config, Some(impact.analysis));
+    let resp = simulate_off_runtime(world, config, Some(impact.analysis)).await?;
     Ok(Json(resp))
 }
 
@@ -111,6 +129,16 @@ pub async fn get_live_data(
     Ok(Json(data))
 }
 
-pub async fn health() -> &'static str {
-    "ok"
+pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let live_fetched_at = state
+        .live_data
+        .read()
+        .await
+        .as_ref()
+        .map(|l| l.fetched_at.clone());
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "live_fetched_at": live_fetched_at,
+    }))
 }

@@ -127,6 +127,11 @@ async fn fetch_elo_ratings(client: &reqwest::Client) -> Result<HashMap<String, f
         })
         .collect();
 
+    // eloratings.net names that differ from our canonical data.rs names.
+    let aliases: HashMap<&str, &str> = [("Czechia", "Czech Republic"), ("Türkiye", "Turkey")]
+        .into_iter()
+        .collect();
+
     let mut ratings = HashMap::new();
     for line in ratings_text.lines() {
         let parts: Vec<&str> = line.split('\t').collect();
@@ -134,7 +139,8 @@ async fn fetch_elo_ratings(client: &reqwest::Client) -> Result<HashMap<String, f
             let code = parts[2];
             let rating_str = parts[3];
             if let (Some(name), Ok(rating)) = (code_to_name.get(code), rating_str.parse::<f64>()) {
-                ratings.insert(name.clone(), rating);
+                let name = aliases.get(name.as_str()).map_or(name.as_str(), |v| v);
+                ratings.insert(name.to_string(), rating);
             }
         }
     }
@@ -157,7 +163,13 @@ async fn fetch_wikipedia_html(client: &reqwest::Client) -> Result<String> {
         .await
         .context("Failed to fetch Wikipedia HTML")?;
 
-    let html = resp["parse"]["text"].as_str().unwrap_or("").to_string();
+    // An error envelope (throttling, page rename, maintenance) still comes
+    // back as HTTP 200 JSON — treating it as an empty page would make the
+    // refresh look successful while applying no data.
+    let html = resp["parse"]["text"]
+        .as_str()
+        .context("Wikipedia API response has no parse.text — page missing or API error")?
+        .to_string();
 
     tracing::info!("Fetched {} bytes of HTML from Wikipedia", html.len());
     Ok(html)
