@@ -183,8 +183,9 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
                 "weights": { "elo": e.w_elo, "dixon_coles": e.w_dc, "pi_ratings": e.w_pi },
                 "dc_fitted_at": e.dc.fitted_at,
                 "pi_matches": e.pi.n_matches,
+                "score_sampler": if e.w_dc > 0.0 { "dixon_coles_joint" } else { "independent_poisson" },
             }),
-            None => serde_json::json!({ "kind": "elo" }),
+            None => serde_json::json!({ "kind": "elo", "score_sampler": "independent_poisson" }),
         }
     };
     Json(serde_json::json!({

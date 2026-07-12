@@ -358,6 +358,29 @@ impl World {
         rng.sample(dist) as i64
     }
 
+    /// ρ for joint-scoreline sampling; `Some` only while the Dixon-Coles
+    /// component carries weight, so `ENSEMBLE_WEIGHTS=1,0,0` (and plain
+    /// `World::new()`) keep the original independent-Poisson behavior.
+    fn score_rho(&self) -> Option<f64> {
+        self.ensemble
+            .as_ref()
+            .filter(|e| e.w_dc > 0.0)
+            .map(|e| e.dc.rho)
+    }
+
+    /// Draw a 90-minute scoreline: from the Dixon-Coles joint distribution
+    /// (low-score cells corrected by ρ) when DC is active, otherwise two
+    /// independent Poissons.
+    fn sample_match_score(&self, la: f64, lb: f64, rng: &mut SmallRng) -> (i64, i64) {
+        match self.score_rho() {
+            Some(rho) => {
+                let (ga, gb) = crate::dixoncoles::sample_score(la, lb, rho, rng.gen::<f64>());
+                (ga as i64, gb as i64)
+            }
+            None => (Self::sample_poisson(rng, la), Self::sample_poisson(rng, lb)),
+        }
+    }
+
     fn rank_group(
         &self,
         letter: &str,
@@ -373,7 +396,7 @@ impl World {
             let (ga, gb) = if let Some(&(sa, sb)) = self.played.get(&(letter.to_string(), pa, pb)) {
                 (sa as i64, sb as i64)
             } else {
-                (Self::sample_poisson(rng, la), Self::sample_poisson(rng, lb))
+                self.sample_match_score(la, lb, rng)
             };
             stats[pa][1] += ga;
             stats[pa][2] += gb;
@@ -526,12 +549,13 @@ impl World {
         let dr = self.elo[ia] - self.elo[ib]
             + data::HOME_ADV * (self.host[ia] as i8 - self.host[ib] as i8) as f64;
         let (la, lb) = self.lam_pair(ia, ib);
-        let ga = Self::sample_poisson(rng, la);
-        let gb = Self::sample_poisson(rng, lb);
+        let (ga, gb) = self.sample_match_score(la, lb, rng);
         if !knockout {
             return (ga, gb, false, false);
         }
         if ga == gb {
+            // Extra time stays independent Poisson: ρ is estimated on
+            // full-match scorelines, not 30-minute periods.
             let et_a = Self::sample_poisson(rng, la * data::ET_FACTOR);
             let et_b = Self::sample_poisson(rng, lb * data::ET_FACTOR);
             let tot_a = ga + et_a;
@@ -653,9 +677,9 @@ impl World {
                 a_wins += 1;
             }
             // Independent draw of the regulation scoreline to estimate how
-            // often the match needs extra time (unbiased, same distribution).
-            let ga = Self::sample_poisson(&mut rng, la);
-            let gb = Self::sample_poisson(&mut rng, lb);
+            // often the match needs extra time (unbiased, same distribution
+            // as ko_match's regulation sampling).
+            let (ga, gb) = self.sample_match_score(la, lb, &mut rng);
             if ga == gb {
                 level_after_90 += 1;
             }
@@ -1226,6 +1250,41 @@ mod tests {
         let weighted = world.lam_pair(arg, fra);
         assert!((pure.0 - weighted.0).abs() < 1e-12);
         assert!((pure.1 - weighted.1).abs() < 1e-12);
+    }
+
+    #[test]
+    fn scoreline_sampling_uses_dc_joint_only_when_dc_weight_is_active() {
+        let mut world = World::new();
+        assert!(world.score_rho().is_none(), "pure Elo world: Poisson path");
+
+        world.ensemble = Some(Ensemble::from_embedded_data(0.5, 0.3, 0.2).expect("ensemble"));
+        let rho = world.score_rho().expect("DC active");
+        assert!(rho < 0.0, "fitted rho should be negative: {rho}");
+
+        // With DC active, sampled draw frequency of a tight match must track
+        // the joint table (which inflates low-score draws for rho < 0).
+        let arg = world.idx["Argentina"];
+        let fra = world.idx["France"];
+        let (la, lb) = world.lam_pair(arg, fra);
+        let table = crate::dixoncoles::score_table(la, lb, rho);
+        let expected_p00 = table[0][0];
+        let mut rng = SmallRng::seed_from_u64(3);
+        let n = 100_000;
+        let mut c00 = 0;
+        for _ in 0..n {
+            if world.sample_match_score(la, lb, &mut rng) == (0, 0) {
+                c00 += 1;
+            }
+        }
+        let p00 = c00 as f64 / n as f64;
+        assert!(
+            (p00 - expected_p00).abs() < 0.005,
+            "sampled p00 {p00} vs table {expected_p00}"
+        );
+
+        // Zero DC weight switches back to the independent-Poisson path.
+        world.ensemble = Some(Ensemble::from_embedded_data(0.8, 0.0, 0.2).expect("ensemble"));
+        assert!(world.score_rho().is_none());
     }
 
     #[test]

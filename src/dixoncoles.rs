@@ -108,6 +108,24 @@ pub fn score_table(
     table
 }
 
+/// Inverse-CDF draw of a scoreline from the Dixon-Coles joint distribution.
+/// `u` must be in `[0, 1)`; the caller supplies it from its own RNG so the
+/// draw stays deterministic under seeded simulation.
+pub fn sample_score(lambda_h: f64, lambda_a: f64, rho: f64, u: f64) -> (u16, u16) {
+    let table = score_table(lambda_h, lambda_a, rho);
+    let mut acc = 0.0;
+    for (x, row) in table.iter().enumerate() {
+        for (y, &p) in row.iter().enumerate() {
+            acc += p;
+            if u < acc {
+                return (x as u16, y as u16);
+            }
+        }
+    }
+    // Floating-point tail: the table sums to 1 within rounding error.
+    (MAX_GOALS as u16, MAX_GOALS as u16)
+}
+
 /// Marginal win/draw/loss probabilities from (λ_h, λ_a, ρ).
 pub fn match_probs(lambda_h: f64, lambda_a: f64, rho: f64) -> (f64, f64, f64) {
     let t = score_table(lambda_h, lambda_a, rho);
@@ -415,6 +433,48 @@ mod tests {
         assert!(t[1][1] > t0[1][1], "DC rho=-0.05 should raise p(1,1)");
         assert!(t[0][0] > t0[0][0], "DC rho=-0.05 should raise p(0,0)");
         let _ = (w, d, l, w0, d0, l0);
+    }
+
+    #[test]
+    fn sample_score_follows_the_joint_table() {
+        let (lh, la, rho) = (1.4, 1.0, -0.05);
+        let table = score_table(lh, la, rho);
+
+        // u=0 lands in the first cell, u→1 in the tail.
+        assert_eq!(sample_score(lh, la, rho, 0.0), (0, 0));
+        assert_eq!(
+            sample_score(lh, la, rho, 1.0 - 1e-15),
+            (MAX_GOALS as u16, MAX_GOALS as u16)
+        );
+
+        // Empirical frequencies match table cells (deterministic seeded RNG).
+        let mut rng = SmallRng::seed_from_u64(7);
+        let n = 200_000;
+        let mut c00 = 0usize;
+        let mut c11 = 0usize;
+        for _ in 0..n {
+            let (x, y) = sample_score(lh, la, rho, rng.gen::<f64>());
+            if (x, y) == (0, 0) {
+                c00 += 1;
+            }
+            if (x, y) == (1, 1) {
+                c11 += 1;
+            }
+        }
+        let (p00, p11) = (c00 as f64 / n as f64, c11 as f64 / n as f64);
+        assert!(
+            (p00 - table[0][0]).abs() < 0.005,
+            "p00 {p00} vs {}",
+            table[0][0]
+        );
+        assert!(
+            (p11 - table[1][1]).abs() < 0.005,
+            "p11 {p11} vs {}",
+            table[1][1]
+        );
+        // Negative rho must inflate the sampled 1-1 rate vs independent Poisson.
+        let indep = score_table(lh, la, 0.0);
+        assert!(p11 > indep[1][1], "rho<0 should raise 1-1 frequency");
     }
 
     #[test]
