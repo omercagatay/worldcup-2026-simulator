@@ -1,11 +1,9 @@
 import { useState } from "react";
 
 const EXAMPLES = [
-  "Lamine Yamal gets injured in Spain's second group match",
-  "Mbappe is suspended for the knockout stage",
+  "Lamine Yamal gets injured in training",
+  "Mbappé is suspended for the semifinal",
   "Argentina's entire defense has food poisoning",
-  "Vinicius Jr and Rodrygo both injured for Brazil",
-  "England's Harry Kane breaks his ankle in training",
 ];
 
 export function ScenarioPrompt({
@@ -18,30 +16,34 @@ export function ScenarioPrompt({
   const [prompt, setPrompt] = useState("");
 
   return (
-    <section className="section scenario-section">
-      <h2>Scenario</h2>
-      <div className="scenario-input">
+    <section className="panel scenario-panel" aria-label="What-if scenario">
+      <header className="panel-head">
+        <h3>What if…</h3>
+      </header>
+      <div className="panel-body">
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Injury, suspension, weather, lineup change…"
-          rows={2}
+          placeholder="Describe an injury, suspension, or upset — the model adjusts team ratings and re-simulates."
+          rows={3}
           disabled={disabled}
         />
-        <button
-          onClick={() => prompt.trim() && onSubmit(prompt)}
-          disabled={disabled || !prompt.trim()}
-        >
-          {disabled ? "Analyzing…" : "Apply"}
-        </button>
-      </div>
-      <details className="examples scenario-examples">
-        <summary>Examples</summary>
-        <div className="example-list">
-          {EXAMPLES.map((ex, i) => (
+        <div className="scenario-actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => prompt.trim() && onSubmit(prompt)}
+            disabled={disabled || !prompt.trim()}
+          >
+            {disabled ? "Analyzing…" : "Run scenario"}
+          </button>
+        </div>
+        <div className="chips">
+          {EXAMPLES.map((ex) => (
             <button
-              key={i}
-              className="example-btn"
+              key={ex}
+              type="button"
+              className="chip"
               onClick={() => setPrompt(ex)}
               disabled={disabled}
             >
@@ -49,7 +51,7 @@ export function ScenarioPrompt({
             </button>
           ))}
         </div>
-      </details>
+      </div>
     </section>
   );
 }

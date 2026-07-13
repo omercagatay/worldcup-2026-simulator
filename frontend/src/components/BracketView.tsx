@@ -1,11 +1,14 @@
 import type { BracketSlot } from "../api";
 
-const R32_MATCHES = [
-  73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88,
+const ROUNDS: { title: string; ids: number[] }[] = [
+  { title: "Round of 32", ids: [73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88] },
+  { title: "Round of 16", ids: [89, 90, 91, 92, 93, 94, 95, 96] },
+  { title: "Quarterfinals", ids: [97, 98, 99, 100] },
+  { title: "Semifinals", ids: [101, 102] },
+  { title: "Final", ids: [104] },
 ];
-const R16_MATCHES = [89, 90, 91, 92, 93, 94, 95, 96];
-const QF_MATCHES = [97, 98, 99, 100];
-const SF_MATCHES = [101, 102];
+
+const FINAL_ID = 104;
 
 export function BracketView({
   bracket,
@@ -15,59 +18,60 @@ export function BracketView({
   champion: string;
 }) {
   const matchAt = (id: number) => bracket.find((s) => s.match_id === id);
-  const nameOrDash = (name: string | undefined) => name && name.length > 0 ? name : "—";
 
-  const TeamLine = ({ name, winner }: { name: string | undefined; winner: boolean }) => (
-    <span className={`match-team-line${winner ? " match-team-winner" : ""}`}>
-      {nameOrDash(name)}
-    </span>
-  );
-
-  const MatchCard = ({ id, championMatch = false }: { id: number; championMatch?: boolean }) => {
-    const slot = matchAt(id);
-    const winner = slot?.winner ?? (championMatch ? champion : undefined);
-
-    return (
-      <div className={`bracket-match${championMatch ? " champion-match" : ""}`}>
-        <div className="match-header">
-          <span className="match-id">M{id}</span>
-          <span className="match-advances">Adv: {nameOrDash(winner)}</span>
-        </div>
-        <div className="match-team-list">
-          <TeamLine name={slot?.team_a} winner={slot?.team_a === winner} />
-          <TeamLine name={slot?.team_b} winner={slot?.team_b === winner} />
-        </div>
-      </div>
-    );
-  };
-
-  const Column = ({
-    title,
-    matches,
-    gap,
-  }: {
-    title: string;
-    matches: number[];
-    gap?: boolean;
-  }) => (
-    <div className="bracket-column" style={gap ? { justifyContent: "space-around" } : undefined}>
-      <h4>{title}</h4>
-      {matches.map((m) => (
-        <MatchCard key={m} id={m} />
-      ))}
-    </div>
+  const TeamLine = ({ name, won }: { name: string | undefined; won: boolean }) => (
+    <div className={`match-line${won ? " won" : ""}`}>{name || "—"}</div>
   );
 
   return (
-    <div className="bracket">
-      <Column title="Round of 32" matches={R32_MATCHES} />
-      <Column title="Round of 16" matches={R16_MATCHES} gap />
-      <Column title="Quarterfinals" matches={QF_MATCHES} gap />
-      <Column title="Semifinals" matches={SF_MATCHES} gap />
-      <div className="bracket-column" style={{ justifyContent: "flex-end" }}>
-        <h4>Final</h4>
-        <MatchCard id={104} championMatch />
+    <div>
+      <div className="bracket-scroll">
+        <div className="bracket">
+          {ROUNDS.map((round) => (
+            <div key={round.title} className="round">
+              <h3 className="round-title">{round.title}</h3>
+              <div className="round-matches">
+                {round.ids.map((id) => {
+                  const slot = matchAt(id);
+                  const isFinal = id === FINAL_ID;
+                  const winner = slot?.winner || (isFinal ? champion : undefined);
+                  const card = (
+                    <div className={`match${isFinal ? " match-final" : ""}`} title={`Match ${id}`}>
+                      <TeamLine
+                        name={slot?.team_a}
+                        won={!!slot?.team_a && slot.team_a === winner}
+                      />
+                      <TeamLine
+                        name={slot?.team_b}
+                        won={!!slot?.team_b && slot.team_b === winner}
+                      />
+                    </div>
+                  );
+                  return (
+                    <div key={id} className="match-slot">
+                      {isFinal && champion ? (
+                        <div className="final-block">
+                          {card}
+                          <div className="champion-crest">
+                            <span className="eyebrow">Simulated champion</span>
+                            <strong>{champion}</strong>
+                          </div>
+                        </div>
+                      ) : (
+                        card
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
+      <p className="source-note">
+        The single simulated bracket that best matches each slot's most common outcome. Matches
+        already played show their real result.
+      </p>
     </div>
   );
 }

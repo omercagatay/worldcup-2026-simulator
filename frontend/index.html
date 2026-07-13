@@ -3,7 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WC 2026 Monte Carlo Simulator</title>
+    <meta name="theme-color" content="#0b0e0c" />
+    <meta name="description" content="Monte Carlo forecast for the 2026 FIFA World Cup" />
+    <title>World Cup 2026 Forecast</title>
+    <script>
+      // Apply the saved (or OS-preferred) theme before first paint to avoid
+      // a dark flash for light-theme users. Mirrors initialTheme() in App.tsx.
+      (function () {
+        try {
+          var t = localStorage.getItem("theme");
+          if (t !== "light" && t !== "dark")
+            t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+          document.documentElement.dataset.theme = t;
+          if (t === "light")
+            document
+              .querySelector('meta[name="theme-color"]')
+              .setAttribute("content", "#e9ede7");
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -9,13 +9,50 @@ import {
   type LiveData,
   type UpcomingMatch,
 } from "./api";
-import { ResultsTable } from "./components/ResultsTable";
+import { ForecastView } from "./components/ForecastView";
 import { GroupTables } from "./components/GroupTables";
 import { BracketView } from "./components/BracketView";
-import { ScenarioPrompt } from "./components/ScenarioPrompt";
 import { LiveStats } from "./components/LiveStats";
 
 type DashboardView = "forecast" | "bracket" | "groups" | "live";
+
+type Theme = "dark" | "light";
+
+// index.html applies the same resolution before first paint; this only
+// needs to agree with it so React state matches the pre-set attribute.
+function initialTheme(): Theme {
+  const saved = localStorage.getItem("theme");
+  if (saved === "light" || saved === "dark") return saved;
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
+const sunIcon = (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    aria-hidden="true"
+  >
+    <circle cx="12" cy="12" r="4.2" />
+    <path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.2 5.2l1.9 1.9M16.9 16.9l1.9 1.9M18.8 5.2l-1.9 1.9M7.1 16.9l-1.9 1.9" />
+  </svg>
+);
+
+const moonIcon = (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M20.4 14.2A8.5 8.5 0 0 1 9.8 3.6a8.5 8.5 0 1 0 10.6 10.6Z" />
+  </svg>
+);
 
 export default function App() {
   const [data, setData] = useState<SimResponse | null>(null);
@@ -27,6 +64,15 @@ export default function App() {
   const [seed, setSeed] = useState(12345);
   const [upcoming, setUpcoming] = useState<UpcomingMatch[]>([]);
   const [activeView, setActiveView] = useState<DashboardView>("forecast");
+  const [theme, setTheme] = useState<Theme>(initialTheme);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("theme", theme);
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute("content", theme === "light" ? "#e9ede7" : "#0b0e0c");
+  }, [theme]);
 
   const handleSimulate = useCallback(async () => {
     setLoading(true);
@@ -103,286 +149,147 @@ export default function App() {
     if (!raw?.startsWith("unix:")) return null;
     const secs = Number(raw.slice(5));
     return Number.isFinite(secs) && secs > 0
-      ? new Date(secs * 1000).toLocaleString()
+      ? new Date(secs * 1000).toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        })
       : null;
   })();
-  const topChampion = data?.top_champions[0];
-  const topScorer = liveData?.goalscorers[0];
-  const topFinal = data?.top_finals[0];
-  const topContenders = data?.top_champions.slice(0, 5) ?? [];
-  const recentKnockouts = liveData?.knockout_matches?.slice(-4).reverse() ?? [];
+
+  const tabs: { id: DashboardView; label: string; disabled: boolean; count?: number }[] = [
+    { id: "forecast", label: "Forecast", disabled: !data },
+    { id: "bracket", label: "Bracket", disabled: !data },
+    { id: "groups", label: "Groups", disabled: !data },
+    { id: "live", label: "Live", disabled: !liveData, count: liveData ? liveMatchCount : undefined },
+  ];
 
   return (
     <div className="app">
-      <header className="header dashboard-header">
-        <div>
-          <span className="eyebrow">Forecast console</span>
-          <h1>World Cup 2026 Simulator</h1>
+      <header className="topbar">
+        <div className="topbar-inner">
+          <div className="brand">
+            <span className="brand-mark">26</span>
+            <div>
+              <h1>World Cup Forecast</h1>
+              <span className="brand-sub">Monte Carlo tournament simulator</span>
+            </div>
+          </div>
+          <div className="topbar-status">
+            {data && <span>{data.n_sims.toLocaleString()} simulations</span>}
+            {lastUpdated && (
+              <span>
+                <span className="live-dot" aria-hidden="true" />
+                updated {lastUpdated}
+              </span>
+            )}
+            {data?.scenario_applied && <span className="badge-scenario">Scenario</span>}
+          </div>
+          <form
+            className="run-controls"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void handleSimulate();
+            }}
+          >
+            <label>
+              Sims
+              <input
+                type="number"
+                value={nSims}
+                onChange={(e) => setNSims(Number(e.target.value))}
+                min={100}
+                max={200000}
+                step={1000}
+              />
+            </label>
+            <label>
+              Seed
+              <input type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value))} />
+            </label>
+            <button type="submit" className="btn btn-primary" disabled={loading}>
+              {loading ? "Running…" : "Run"}
+            </button>
+            <button type="button" className="btn" onClick={handleRefresh} disabled={refreshing}>
+              {refreshing ? "Updating…" : "Update live data"}
+            </button>
+          </form>
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          >
+            {theme === "dark" ? sunIcon : moonIcon}
+          </button>
         </div>
-        <div className="status-pills">
-          <span className="status-pill">{data ? `${data.n_sims.toLocaleString()} sims` : "Ready"}</span>
-          {liveData && <span className="status-pill live">Live {liveMatchCount} matches</span>}
-          {lastUpdated && <span className="status-pill">Updated {lastUpdated}</span>}
-          {data?.scenario_applied && <span className="status-pill scenario">Scenario applied</span>}
-        </div>
+        <nav className="tabs" role="tablist" aria-label="Dashboard views">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              className="tab"
+              aria-selected={activeView === t.id}
+              disabled={t.disabled}
+              onClick={() => setActiveView(t.id)}
+            >
+              {t.label}
+              {t.count != null && <span className="tab-count">{t.count}</span>}
+            </button>
+          ))}
+        </nav>
       </header>
 
-      <div className="controls">
-        <label>
-          Simulations:
-          <input
-            type="number"
-            value={nSims}
-            onChange={(e) => setNSims(Number(e.target.value))}
-            min={100}
-            max={200000}
-            step={1000}
-          />
-        </label>
-        <label>
-          Seed:
-          <input
-            type="number"
-            value={seed}
-            onChange={(e) => setSeed(Number(e.target.value))}
-          />
-        </label>
-        <button onClick={handleSimulate} disabled={loading}>
-          {loading ? "Running…" : "Run Simulation"}
-        </button>
-        <button
-          className="refresh-btn"
-          onClick={handleRefresh}
-          disabled={refreshing}
-        >
-          {refreshing ? "Scraping…" : "Refresh Live Data"}
-        </button>
-      </div>
-
-      {error && <div className="error">{error}</div>}
-
-      {loading && !data && <div className="loading">Running Monte Carlo simulation…</div>}
-
-      {!data && !loading && !error && (
-        <div className="empty-state">
-          <p>Click <strong>Run Simulation</strong> to start.</p>
-          <p className="empty-hint">50,000 tournaments will be simulated in parallel.</p>
+      {error && (
+        <div className="error-banner" role="alert">
+          {error}
         </div>
       )}
 
-      {(data || liveData) && (
-        <section className="summary-grid">
-          <div className="summary-item primary">
-            <span className="summary-label">Champion Mode</span>
-            <strong>{topChampion?.team ?? "-"}</strong>
-            <span>{topChampion ? `${topChampion.win_pct.toFixed(2)}% win` : "Run a simulation"}</span>
+      <main className="content">
+        {!data && loading && (
+          <div className="boot-state">
+            <div className="boot-spinner" aria-hidden="true" />
+            <span className="eyebrow">Simulating</span>
+            <p>{nSims.toLocaleString()} tournaments, in parallel. A few seconds.</p>
           </div>
-          <div className="summary-item">
-            <span className="summary-label">Golden Boot</span>
-            <strong>{topScorer?.player ?? "-"}</strong>
-            <span>{topScorer ? `${topScorer.goals} goals · ${topScorer.country}` : "Refresh live data"}</span>
+        )}
+
+        {!data && !loading && (
+          <div className="boot-state">
+            <span className="eyebrow">No forecast yet</span>
+            <p style={{ marginBottom: "1rem" }}>
+              Run the simulation to see who wins the World Cup.
+            </p>
+            <button className="btn btn-primary" onClick={handleSimulate}>
+              Run simulation
+            </button>
           </div>
-          <div className="summary-item">
-            <span className="summary-label">Top Final</span>
-            <strong>{topFinal ? `${topFinal.a} vs ${topFinal.b}` : "-"}</strong>
-            <span>{topFinal ? `${topFinal.pct.toFixed(2)}% of sims` : "Run a simulation"}</span>
-          </div>
-          <div className="summary-item">
-            <span className="summary-label">Live Coverage</span>
-            <strong>{liveData ? liveMatchCount : "-"}</strong>
-            <span>{liveData ? `${Object.keys(liveData.elo_ratings).length} Elo ratings` : "Not loaded"}</span>
-          </div>
-        </section>
-      )}
+        )}
 
-      {data && (
-        <>
-          {data.scenario_applied && (
-            <div className="scenario-info">
-              <strong>LLM Analysis:</strong> {data.scenario_applied}
-              {Object.keys(data.elo_overrides).length > 0 && (
-                <div className="elo-deltas">
-                  <strong>Elo adjustments:</strong>
-                  {Object.entries(data.elo_overrides).map(([team, elo]) => (
-                    <span key={team} className="elo-delta">
-                      {team}: {elo.toFixed(0)}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+        {data && activeView === "forecast" && (
+          <ForecastView
+            data={data}
+            liveData={liveData}
+            upcoming={upcoming}
+            loading={loading}
+            onScenario={handleScenario}
+            liveMatchCount={liveMatchCount}
+            onShowLive={() => setActiveView("live")}
+          />
+        )}
 
-          <div className="analysis-layout">
-            <main className="forecast-panel">
-              {data.consensus_champion && (
-                <div className="champion-banner">
-                  <div className="champion-label">Consensus Champion</div>
-                  <div className="champion-name">{data.consensus_champion}</div>
-                  <div className="champion-odds">
-                    {data.top_champions[0]?.win_pct.toFixed(2)}% win rate
-                    {data.top_champions[0]?.win_odds != null &&
-                      ` · ${data.top_champions[0].win_odds.toFixed(2)} decimal odds`}
-                    {" · "}
-                    {data.n_sims.toLocaleString()} simulations
-                  </div>
-                </div>
-              )}
+        {data && activeView === "bracket" && (
+          <BracketView bracket={data.bracket} champion={data.consensus_champion} />
+        )}
 
-              <section className="contender-strip">
-                <div className="strip-heading">
-                  <span className="summary-label">Win Leaders</span>
-                  <strong>Top contenders</strong>
-                </div>
-                <div className="contender-list">
-                  {topContenders.map((team, i) => (
-                    <div key={team.team} className="contender-row">
-                      <span className="contender-rank">{i + 1}</span>
-                      <span className="contender-team">{team.team}</span>
-                      <span className="contender-pct">{team.win_pct.toFixed(2)}%</span>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            </main>
+        {data && activeView === "groups" && <GroupTables groups={data.groups} />}
 
-            <aside className="insight-rail">
-              <ScenarioPrompt onSubmit={handleScenario} disabled={loading} />
-
-              {upcoming.length > 0 && (
-                <section className="rail-panel">
-                  <h3>Upcoming Matches</h3>
-                  <div className="upcoming-list">
-                    {upcoming.map((m) => (
-                      <div key={m.match_id} className="upcoming-match">
-                        <span className="upcoming-round">{m.round}</span>
-                        <div className="upcoming-teams">
-                          <span className={m.a_win_pct >= m.b_win_pct ? "favored" : ""}>
-                            {m.team_a} {m.a_win_pct.toFixed(1)}%
-                          </span>
-                          <span className="upcoming-vs">vs</span>
-                          <span className={m.b_win_pct > m.a_win_pct ? "favored" : ""}>
-                            {m.team_b} {m.b_win_pct.toFixed(1)}%
-                          </span>
-                        </div>
-                        <div className="upcoming-bar">
-                          <div
-                            className="upcoming-bar-a"
-                            style={{ width: `${m.a_win_pct}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              )}
-
-              <section className="rail-panel">
-                <h3>Likely Finals</h3>
-                <div className="finals-list compact">
-                  {data.top_finals.slice(0, 5).map((f, i) => (
-                    <div key={i} className="final-pair">
-                      <span>
-                        <strong>{f.a}</strong> vs <strong>{f.b}</strong>
-                      </span>
-                      <span className="pct-tag">{f.pct.toFixed(2)}%</span>
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              {liveData && (
-                <section className="rail-panel live-snapshot">
-                  <h3>Live Snapshot</h3>
-                  <div className="snapshot-grid">
-                    <span>Matches</span>
-                    <strong>{liveMatchCount}</strong>
-                    <span>Goals</span>
-                    <strong>{liveData.tournament_stats?.goals_scored ?? "-"}</strong>
-                    <span>Golden Boot</span>
-                    <strong>{topScorer ? `${topScorer.player} (${topScorer.goals})` : "-"}</strong>
-                  </div>
-                  {recentKnockouts.length > 0 && (
-                    <div className="recent-knockouts">
-                      {recentKnockouts.map((m, i) => (
-                        <span key={i}>{m.winner} advanced</span>
-                      ))}
-                    </div>
-                  )}
-                </section>
-              )}
-            </aside>
-          </div>
-        </>
-      )}
-
-      {(data || liveData) && (
-        <>
-          <nav className="view-tabs" aria-label="Dashboard views">
-            {data && (
-              <button
-                type="button"
-                className={activeView === "forecast" ? "active" : ""}
-                onClick={() => setActiveView("forecast")}
-              >
-                Forecast
-              </button>
-            )}
-            {data && (
-              <button
-                type="button"
-                className={activeView === "bracket" ? "active" : ""}
-                onClick={() => setActiveView("bracket")}
-              >
-                Bracket
-              </button>
-            )}
-            {data && (
-              <button
-                type="button"
-                className={activeView === "groups" ? "active" : ""}
-                onClick={() => setActiveView("groups")}
-              >
-                Groups
-              </button>
-            )}
-            {liveData && (
-              <button
-                type="button"
-                className={activeView === "live" ? "active" : ""}
-                onClick={() => setActiveView("live")}
-              >
-                Live Data
-              </button>
-            )}
-          </nav>
-
-          {data && activeView === "forecast" && (
-            <section className="section tab-panel">
-              <h2>Tournament Win Probabilities</h2>
-              <ResultsTable teams={data.teams} />
-            </section>
-          )}
-
-          {data && activeView === "bracket" && (
-            <section className="section tab-panel">
-              <h2>Representative Bracket</h2>
-              <BracketView bracket={data.bracket} champion={data.consensus_champion} />
-            </section>
-          )}
-
-          {data && activeView === "groups" && (
-            <section className="section tab-panel">
-              <h2>Group Stage Probabilities</h2>
-              <GroupTables groups={data.groups} />
-            </section>
-          )}
-
-          {liveData && activeView === "live" && (
-            <LiveStats liveData={liveData} />
-          )}
-        </>
-      )}
+        {liveData && activeView === "live" && <LiveStats liveData={liveData} />}
+      </main>
     </div>
   );
 }
