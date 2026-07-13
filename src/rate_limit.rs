@@ -24,14 +24,16 @@ pub struct RateLimitLayer {
     limiter: Arc<Mutex<HashMap<String, Vec<Instant>>>>,
     max_requests: usize,
     window: Duration,
+    trust_proxy: bool,
 }
 
 impl RateLimitLayer {
-    pub fn new(max_requests: usize, window_secs: u64) -> Self {
+    pub fn new(max_requests: usize, window_secs: u64, trust_proxy: bool) -> Self {
         Self {
             limiter: Arc::new(Mutex::new(HashMap::new())),
             max_requests,
             window: Duration::from_secs(window_secs),
+            trust_proxy,
         }
     }
 }
@@ -45,6 +47,7 @@ impl<S> Layer<S> for RateLimitLayer {
             limiter: self.limiter.clone(),
             max_requests: self.max_requests,
             window: self.window,
+            trust_proxy: self.trust_proxy,
         }
     }
 }
@@ -55,22 +58,26 @@ pub struct RateLimit<S> {
     limiter: Arc<Mutex<HashMap<String, Vec<Instant>>>>,
     max_requests: usize,
     window: Duration,
+    trust_proxy: bool,
 }
 
 /// Identify the client for rate-limiting purposes.
 ///
-/// Behind Railway's edge proxy the TCP peer is the proxy, not the client;
-/// the proxy appends the real client IP as the LAST entry of
-/// `X-Forwarded-For` (earlier entries are client-supplied and spoofable).
-/// Falls back to the socket peer address for direct connections.
-fn client_key(req: &Request<Body>) -> Option<String> {
-    if let Some(xff) = req
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-    {
-        if let Some(ip) = xff.rsplit(',').map(str::trim).find(|s| !s.is_empty()) {
-            return Some(ip.to_string());
+/// `X-Forwarded-For` is client-controlled unless a trusted reverse proxy
+/// sets it, so it is only consulted when `trust_proxy` is on (TRUST_PROXY=1,
+/// as on Railway, whose edge appends the real client IP as the LAST entry;
+/// earlier entries are client-supplied and spoofable). Otherwise — and as a
+/// fallback — the socket peer address identifies the client.
+fn client_key(req: &Request<Body>, trust_proxy: bool) -> Option<String> {
+    if trust_proxy {
+        if let Some(xff) = req
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+        {
+            if let Some(ip) = xff.rsplit(',').map(str::trim).find(|s| !s.is_empty()) {
+                return Some(ip.to_string());
+            }
         }
     }
     req.extensions()
@@ -97,7 +104,7 @@ where
         let limiter = self.limiter.clone();
         let max_requests = self.max_requests;
         let window = self.window;
-        let key = client_key(&req);
+        let key = client_key(&req, self.trust_proxy);
         let mut inner = self.inner.clone();
 
         Box::pin(async move {
@@ -138,22 +145,31 @@ mod tests {
     }
 
     #[test]
-    fn client_key_uses_last_forwarded_for_entry() {
+    fn client_key_uses_last_forwarded_for_entry_when_proxy_trusted() {
         let req = req_with_xff(Some("1.2.3.4, 10.0.0.7, 203.0.113.9"));
-        assert_eq!(client_key(&req), Some("203.0.113.9".to_string()));
+        assert_eq!(client_key(&req, true), Some("203.0.113.9".to_string()));
     }
 
     #[test]
-    fn client_key_falls_back_to_connect_info() {
+    fn client_key_ignores_forwarded_for_when_proxy_untrusted() {
+        let mut req = req_with_xff(Some("6.6.6.6"));
+        let addr: SocketAddr = "192.0.2.1:5000".parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(addr));
+        assert_eq!(client_key(&req, false), Some("192.0.2.1".to_string()));
+    }
+
+    #[test]
+    fn client_key_falls_back_to_connect_info_when_no_forwarded_for() {
         let mut req = req_with_xff(None);
         let addr: SocketAddr = "192.0.2.1:5000".parse().unwrap();
         req.extensions_mut().insert(ConnectInfo(addr));
-        assert_eq!(client_key(&req), Some("192.0.2.1".to_string()));
+        assert_eq!(client_key(&req, true), Some("192.0.2.1".to_string()));
     }
 
     #[test]
     fn client_key_none_without_any_source() {
         let req = req_with_xff(None);
-        assert_eq!(client_key(&req), None);
+        assert_eq!(client_key(&req, true), None);
+        assert_eq!(client_key(&req, false), None);
     }
 }

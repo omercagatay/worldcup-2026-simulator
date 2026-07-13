@@ -97,28 +97,40 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("Background live refresh disabled (LIVE_REFRESH_MINUTES=0)");
     }
 
+    // Only trust X-Forwarded-For for rate limiting when a sanitizing reverse
+    // proxy (e.g. Railway's edge) fronts the server; a spoofed header would
+    // otherwise give every request a fresh rate-limit bucket.
+    let trust_proxy = std::env::var("TRUST_PROXY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if trust_proxy {
+        tracing::info!("TRUST_PROXY on: rate limiting keys on X-Forwarded-For");
+    } else {
+        tracing::info!("TRUST_PROXY off: rate limiting keys on socket peer address");
+    }
+
     let app = Router::new()
         .route("/api/health", get(handlers::health))
         .route("/api/live", get(handlers::get_live_data))
         .merge(
             Router::new()
                 .route("/api/simulate", post(handlers::run_sim))
-                .route_layer(RateLimitLayer::new(30, 60)),
+                .route_layer(RateLimitLayer::new(30, 60, trust_proxy)),
         )
         .merge(
             Router::new()
                 .route("/api/upcoming", get(handlers::upcoming))
-                .route_layer(RateLimitLayer::new(30, 60)),
+                .route_layer(RateLimitLayer::new(30, 60, trust_proxy)),
         )
         .merge(
             Router::new()
                 .route("/api/scenario", post(handlers::scenario))
-                .route_layer(RateLimitLayer::new(10, 60)),
+                .route_layer(RateLimitLayer::new(10, 60, trust_proxy)),
         )
         .merge(
             Router::new()
                 .route("/api/refresh", post(handlers::refresh_live_data))
-                .route_layer(RateLimitLayer::new(5, 60)),
+                .route_layer(RateLimitLayer::new(5, 60, trust_proxy)),
         )
         .layer(RequestBodyLimitLayer::new(1024 * 1024))
         .layer(CorsLayer::permissive())

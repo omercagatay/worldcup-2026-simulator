@@ -6,6 +6,21 @@ const MIN_SIMS: usize = 100;
 const MAX_SIMS: usize = 200_000;
 const MIN_ELO: f64 = 1000.0;
 const MAX_ELO: f64 = 2600.0;
+/// Scenario prompts are forwarded verbatim to the paid LLM API, so cap them
+/// well below the 1 MB request-body limit to bound per-request token cost.
+pub const MAX_PROMPT_CHARS: usize = 2000;
+
+pub fn validate_prompt(prompt: &str) -> Result<(), String> {
+    if prompt.trim().is_empty() {
+        Err("Scenario prompt must not be empty".to_string())
+    } else if prompt.chars().count() > MAX_PROMPT_CHARS {
+        Err(format!(
+            "Scenario prompt must be at most {MAX_PROMPT_CHARS} characters"
+        ))
+    } else {
+        Ok(())
+    }
+}
 
 pub fn validate_n_sims(n: usize) -> Result<usize, String> {
     if n < MIN_SIMS {
@@ -50,6 +65,23 @@ mod tests {
         assert!(validate_n_sims(50).is_err());
         assert!(validate_n_sims(200_001).is_err());
         assert!(validate_n_sims(0).is_err());
+    }
+
+    #[test]
+    fn prompt_within_limit_is_ok() {
+        assert!(validate_prompt("Mbappé injured in training").is_ok());
+        assert!(validate_prompt(&"x".repeat(MAX_PROMPT_CHARS)).is_ok());
+    }
+
+    #[test]
+    fn prompt_over_limit_is_rejected() {
+        assert!(validate_prompt(&"x".repeat(MAX_PROMPT_CHARS + 1)).is_err());
+    }
+
+    #[test]
+    fn empty_or_blank_prompt_is_rejected() {
+        assert!(validate_prompt("").is_err());
+        assert!(validate_prompt("   \n\t").is_err());
     }
 
     #[test]

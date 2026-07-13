@@ -26,6 +26,7 @@ export function ScenarioPrompt({
           onChange={(e) => setPrompt(e.target.value)}
           placeholder="Describe an injury, suspension, or upset — the model adjusts team ratings and re-simulates."
           rows={3}
+          maxLength={2000}
           disabled={disabled}
         />
         <div className="scenario-actions">

@@ -6,7 +6,7 @@ use crate::llm;
 use crate::models::{build_response, ScenarioRequest, SimRequest, SimResponse};
 use crate::scraper::{self, LiveData};
 use crate::sim::{SimConfig, World};
-use crate::validation::{validate_elo_overrides, validate_n_sims};
+use crate::validation::{validate_elo_overrides, validate_n_sims, validate_prompt};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -71,6 +71,7 @@ pub async fn scenario(
 
     let n_sims =
         validate_n_sims(req.n_sims.unwrap_or(50000)).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    validate_prompt(&req.prompt).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
     let impact = llm::analyze_scenario(&req.prompt, &api_key)
         .await
